@@ -1,0 +1,6 @@
+[submodule "network-monitor-web"]
+	path = network-monitor-web
+	url = https://github.com/sounmu/network-monitor-web.git
+[submodule "network-monitor-server"]
+	path = network-monitor-server
+	url = https://github.com/sounmu/network-monitor-server.git

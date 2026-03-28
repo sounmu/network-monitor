@@ -1,0 +1,47 @@
+version: "3.8"
+
+services:
+  # 1. PostgreSQL DB: 외부에 포트 노출하지 않고 내부망 연결만 허용
+  db:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    volumes:
+      - ./pgdata:/var/lib/postgresql/data
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-network_monitor}
+
+  # 2. Rust 백엔드 서버 (Ubuntu 24.04 베이스 러너)
+  server:
+    build:
+      context: ./network-monitor-server
+      dockerfile: Dockerfile
+    depends_on:
+      - db
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-network_monitor}
+
+  # 3. Next.js 프론트엔드 앱 (Standalone)
+  web:
+    build:
+      context: ./network-monitor-web
+      dockerfile: Dockerfile
+      args:
+        - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:3000}
+    depends_on:
+      - server
+    restart: unless-stopped
+    environment:
+      - PORT=3000
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:3000}
+
+  # 4. Cloudflare Tunnel (모든 외부 트래픽을 중계)
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    command: tunnel --no-autoupdate run
+    restart: unless-stopped
+    environment:
+      # 대시보드에서 발급받은 터널 접속 토큰 (외부 노출 금지)
+      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
