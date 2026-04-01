@@ -11,6 +11,8 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       POSTGRES_DB: ${POSTGRES_DB:-network_monitor}
+    networks:
+      - backend-internal
 
   # 2. Rust 백엔드 서버 (Ubuntu 24.04 베이스 러너)
   server:
@@ -20,8 +22,14 @@ services:
     depends_on:
       - db
     restart: unless-stopped
+    volumes:
+      - ./network-monitor-server/.env:/app/.env
+      - ./network-monitor-server/config.yaml:/app/config.yaml
     environment:
       - DATABASE_URL=postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-network_monitor}
+    networks:
+      - shared-network
+      - backend-internal
 
   # 3. Next.js 프론트엔드 앱 (Standalone)
   web:
@@ -30,18 +38,19 @@ services:
       dockerfile: Dockerfile
       args:
         - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:3000}
+        - NEXT_PUBLIC_WEB_API_KEY=${NEXT_PUBLIC_WEB_API_KEY:-default_web_api_key}
     depends_on:
       - server
     restart: unless-stopped
     environment:
       - PORT=3000
+      - HOSTNAME=0.0.0.0
       - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:3000}
+    networks:
+      - shared-network
 
-  # 4. Cloudflare Tunnel (모든 외부 트래픽을 중계)
-  tunnel:
-    image: cloudflare/cloudflared:latest
-    command: tunnel --no-autoupdate run
-    restart: unless-stopped
-    environment:
-      # 대시보드에서 발급받은 터널 접속 토큰 (외부 노출 금지)
-      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
+
+networks:
+  shared-network:
+    external: true
+  backend-internal:
