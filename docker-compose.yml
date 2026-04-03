@@ -23,7 +23,7 @@ services:
       resources:
         limits:
           cpus: "1.0"
-          memory: 512M
+          memory: 1G
 
   # 2. Rust backend server
   server:
@@ -46,7 +46,7 @@ services:
       resources:
         limits:
           cpus: "1.0"
-          memory: 256M
+          memory: 8G
 
   # 3. Next.js frontend (standalone build)
   web:
@@ -55,7 +55,6 @@ services:
       dockerfile: Dockerfile
       args:
         - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:3000}
-        - NEXT_PUBLIC_WEB_API_KEY=${NEXT_PUBLIC_WEB_API_KEY:-default_web_api_key}
     depends_on:
       - server
     restart: unless-stopped
@@ -68,8 +67,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.5"
-          memory: 256M
+          cpus: "1.0"
+          memory: 4G
 
 
 networks:

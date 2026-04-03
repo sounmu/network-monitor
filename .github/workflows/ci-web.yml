@@ -39,7 +39,5 @@ jobs:
       - name: Build
         run: npm run build
         env:
-          # Fallback values keep the build passing in CI without real secrets.
-          # These are not used at runtime — they are only referenced client-side via SWR.
+          # Fallback value keeps the build passing in CI without real config.
           NEXT_PUBLIC_API_URL: http://localhost:3000
-          NEXT_PUBLIC_WEB_API_KEY: ci-placeholder-key
