@@ -29,6 +29,7 @@
 - i18n: English (default) + Korean
 - HTTP endpoint monitoring (response time, status code, uptime tracking)
 - Ping/TCP reachability monitoring for network devices
+- User authentication with Argon2 password hashing and JWT sessions
 - Zero-Trust deployment via Cloudflare Tunnel (no exposed host ports)
 
 ---
@@ -186,6 +187,10 @@ All endpoints require `Authorization: Bearer <JWT or WEB_API_KEY>` unless noted.
 
 | Method | Path | Description |
 |---|---|---|
+| `POST` | `/api/auth/login` | Login **(no auth)** |
+| `POST` | `/api/auth/setup` | Create initial admin **(no auth, first run only)** |
+| `GET` | `/api/auth/me` | Current user info |
+| `GET` | `/api/auth/status` | Check if setup needed **(no auth)** |
 | `GET` | `/api/hosts` | List all hosts with online status |
 | `GET` | `/api/hosts/{host_key}` | Get a single host configuration |
 | `POST` | `/api/hosts` | Register a new host |
@@ -230,6 +235,7 @@ All endpoints require `Authorization: Bearer <JWT or WEB_API_KEY>` unless noted.
 | **`hosts`** | Agent registry (scrape interval, thresholds, monitored ports/containers) |
 | **`alert_configs`** | Alert rules; `NULL host_key` = global default, per-host rows override. Supports cpu/memory/disk metric types. |
 | **`notification_channels`** | Alert delivery targets (Discord webhook, Slack webhook, Email SMTP). Config stored as JSONB. |
+| **`users`** | User accounts with Argon2 password hashing. Roles: admin, viewer. |
 | **`alert_history`** | Immutable log of all alert events with timestamps. |
 | **`http_monitors`** | External HTTP endpoint monitors with check intervals. |
 | **`http_monitor_results`** | HTTP check results (status code, response time, errors). |
