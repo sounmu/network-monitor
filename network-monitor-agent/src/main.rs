@@ -95,6 +95,8 @@ struct AgentMetrics {
     load_average: LoadAverage,
     docker: Vec<DockerContainer>,
     ports: Vec<PortStatus>,
+    /// Agent binary version (from Cargo.toml at build time)
+    agent_version: String,
 }
 
 #[derive(Serialize)]
@@ -717,6 +719,7 @@ async fn metrics_handler(
         load_average: sys_result.load_average,
         docker: docker_containers,
         ports: port_statuses,
+        agent_version: env!("CARGO_PKG_VERSION").to_string(),
     };
 
     // bincode binary serialisation: ~40–70% smaller payload than JSON, near-zero-copy parsing speed.

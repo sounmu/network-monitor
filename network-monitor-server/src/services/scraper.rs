@@ -12,6 +12,10 @@ use crate::models::sse_payloads::{HostStatusPayload, SseBroadcast};
 use crate::repositories::{alert_configs_repo, hosts_repo};
 use crate::services::{alert_service, metrics_service};
 
+/// Server version (from Cargo.toml at build time)
+const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
+/// Minimum agent version the server fully supports
+const MIN_AGENT_VERSION: &str = "0.1.0";
 /// HTTP request timeout for each agent scrape (seconds)
 const SCRAPE_TIMEOUT_SECS: u64 = 5;
 /// Cooldown to suppress repeated UP/DOWN alert flapping (seconds)
@@ -194,6 +198,17 @@ async fn scrape_one(
         Ok(resp) if resp.status().is_success() => match resp.bytes().await {
             Ok(bytes) => match bincode::deserialize::<AgentMetrics>(&bytes) {
                 Ok(metrics) => {
+                    if metrics.agent_version.is_empty() {
+                        tracing::warn!(target = %target, "⚠️ [Scraper] Agent has no version field — consider upgrading");
+                    } else if metrics.agent_version.as_str() < MIN_AGENT_VERSION {
+                        tracing::warn!(
+                            target = %target,
+                            agent_version = %metrics.agent_version,
+                            min_version = MIN_AGENT_VERSION,
+                            server_version = SERVER_VERSION,
+                            "⚠️ [Scraper] Agent version below minimum — consider upgrading"
+                        );
+                    }
                     handle_success(metrics, target, alert_config, state).await;
                     Ok(())
                 }

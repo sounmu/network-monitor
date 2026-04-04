@@ -17,6 +17,9 @@ pub struct AgentMetrics {
     pub docker_containers: Vec<DockerContainer>,
     #[serde(default)]
     pub ports: Vec<PortStatus>,
+    /// Agent binary version (e.g. "0.1.0"). Empty string for older agents without this field.
+    #[serde(default)]
+    pub agent_version: String,
 }
 
 /// System resource metrics (CPU, RAM, disk, processes, temperatures, GPUs)
