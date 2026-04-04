@@ -233,3 +233,59 @@ fn validate_interval_and_timeout(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_valid_http_monitor() {
+        assert!(validate_http_monitor_request("http://example.com", Some(200), Some(60), Some(5000)).is_ok());
+        assert!(validate_http_monitor_request("https://example.com", None, None, None).is_ok());
+    }
+
+    #[test]
+    fn test_http_monitor_invalid_url() {
+        assert!(validate_http_monitor_request("", None, None, None).is_err());
+        assert!(validate_http_monitor_request("ftp://example.com", None, None, None).is_err());
+        assert!(validate_http_monitor_request("example.com", None, None, None).is_err());
+    }
+
+    #[test]
+    fn test_http_monitor_invalid_status() {
+        assert!(validate_http_monitor_request("http://x.com", Some(99), None, None).is_err());
+        assert!(validate_http_monitor_request("http://x.com", Some(600), None, None).is_err());
+    }
+
+    #[test]
+    fn test_monitor_interval_range() {
+        assert!(validate_interval_and_timeout(Some(9), None).is_err());
+        assert!(validate_interval_and_timeout(Some(10), None).is_ok());
+        assert!(validate_interval_and_timeout(Some(3600), None).is_ok());
+        assert!(validate_interval_and_timeout(Some(3601), None).is_err());
+    }
+
+    #[test]
+    fn test_monitor_timeout_range() {
+        assert!(validate_interval_and_timeout(None, Some(999)).is_err());
+        assert!(validate_interval_and_timeout(None, Some(1000)).is_ok());
+        assert!(validate_interval_and_timeout(None, Some(30000)).is_ok());
+        assert!(validate_interval_and_timeout(None, Some(30001)).is_err());
+    }
+
+    #[test]
+    fn test_valid_ping_monitor() {
+        assert!(validate_ping_monitor_request("192.168.1.1", Some(60), Some(5000)).is_ok());
+    }
+
+    #[test]
+    fn test_ping_monitor_empty_host() {
+        assert!(validate_ping_monitor_request("", None, None).is_err());
+    }
+
+    #[test]
+    fn test_ping_monitor_host_too_long() {
+        let long_host = "a".repeat(256);
+        assert!(validate_ping_monitor_request(&long_host, None, None).is_err());
+    }
+}

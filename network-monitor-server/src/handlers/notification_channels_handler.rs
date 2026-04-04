@@ -121,3 +121,43 @@ fn validate_channel(channel_type: &str, config: &serde_json::Value) -> Result<()
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_valid_discord_channel() {
+        let config = json!({ "webhook_url": "https://discord.com/api/webhooks/123/abc" });
+        assert!(validate_channel("discord", &config).is_ok());
+    }
+
+    #[test]
+    fn test_discord_missing_webhook() {
+        assert!(validate_channel("discord", &json!({})).is_err());
+        assert!(validate_channel("discord", &json!({ "webhook_url": "" })).is_err());
+    }
+
+    #[test]
+    fn test_valid_email_channel() {
+        let config = json!({
+            "smtp_host": "smtp.example.com",
+            "from": "noreply@example.com",
+            "to": "admin@example.com"
+        });
+        assert!(validate_channel("email", &config).is_ok());
+    }
+
+    #[test]
+    fn test_email_missing_fields() {
+        assert!(validate_channel("email", &json!({ "smtp_host": "x", "from": "x" })).is_err());
+        assert!(validate_channel("email", &json!({ "smtp_host": "x", "to": "x" })).is_err());
+        assert!(validate_channel("email", &json!({ "from": "x", "to": "x" })).is_err());
+    }
+
+    #[test]
+    fn test_unsupported_channel_type() {
+        assert!(validate_channel("telegram", &json!({})).is_err());
+    }
+}

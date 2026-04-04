@@ -105,3 +105,55 @@ fn validate_alert_request(req: &UpsertAlertRequest) -> Result<(), AppError> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_request(
+        metric_type: &str,
+        threshold: f64,
+        sustained_secs: i32,
+        cooldown_secs: i32,
+    ) -> UpsertAlertRequest {
+        UpsertAlertRequest {
+            metric_type: metric_type.to_string(),
+            enabled: true,
+            threshold,
+            sustained_secs,
+            cooldown_secs,
+        }
+    }
+
+    #[test]
+    fn test_valid_alert_config() {
+        assert!(validate_alert_request(&make_request("cpu", 80.0, 300, 60)).is_ok());
+        assert!(validate_alert_request(&make_request("memory", 90.0, 0, 0)).is_ok());
+        assert!(validate_alert_request(&make_request("disk", 0.0, 3600, 86400)).is_ok());
+        assert!(validate_alert_request(&make_request("cpu", 100.0, 0, 0)).is_ok());
+    }
+
+    #[test]
+    fn test_invalid_metric_type() {
+        assert!(validate_alert_request(&make_request("network", 80.0, 300, 60)).is_err());
+        assert!(validate_alert_request(&make_request("", 80.0, 300, 60)).is_err());
+    }
+
+    #[test]
+    fn test_threshold_out_of_range() {
+        assert!(validate_alert_request(&make_request("cpu", -1.0, 300, 60)).is_err());
+        assert!(validate_alert_request(&make_request("cpu", 101.0, 300, 60)).is_err());
+    }
+
+    #[test]
+    fn test_sustained_secs_out_of_range() {
+        assert!(validate_alert_request(&make_request("cpu", 80.0, -1, 60)).is_err());
+        assert!(validate_alert_request(&make_request("cpu", 80.0, 3601, 60)).is_err());
+    }
+
+    #[test]
+    fn test_cooldown_secs_out_of_range() {
+        assert!(validate_alert_request(&make_request("cpu", 80.0, 300, -1)).is_err());
+        assert!(validate_alert_request(&make_request("cpu", 80.0, 300, 86401)).is_err());
+    }
+}
