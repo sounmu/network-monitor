@@ -56,7 +56,10 @@ pub async fn count_users(pool: &PgPool) -> Result<i64, sqlx::Error> {
     Ok(count)
 }
 
-pub async fn find_by_username(pool: &PgPool, username: &str) -> Result<Option<UserRow>, sqlx::Error> {
+pub async fn find_by_username(
+    pool: &PgPool,
+    username: &str,
+) -> Result<Option<UserRow>, sqlx::Error> {
     sqlx::query_as::<_, UserRow>("SELECT * FROM users WHERE username = $1")
         .bind(username)
         .fetch_optional(pool)

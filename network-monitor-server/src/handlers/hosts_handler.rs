@@ -40,7 +40,9 @@ pub async fn create_host(
     Json(body): Json<CreateHostRequest>,
 ) -> Result<Json<HostRow>, AppError> {
     if body.host_key.trim().is_empty() {
-        return Err(AppError::BadRequest("host_key must not be empty".to_string()));
+        return Err(AppError::BadRequest(
+            "host_key must not be empty".to_string(),
+        ));
     }
     if body.host_key.len() > MAX_KEY_LEN {
         return Err(AppError::BadRequest(format!(
@@ -56,13 +58,15 @@ pub async fn create_host(
     }
     validate_ports(&body.ports)?;
 
-    let host = hosts_repo::create_host(&state.db_pool, &body).await.map_err(|e| {
-        if e.to_string().contains("duplicate key") {
-            AppError::Conflict(format!("host_key already exists: {}", body.host_key))
-        } else {
-            AppError::Internal(format!("Failed to create host: {}", e))
-        }
-    })?;
+    let host = hosts_repo::create_host(&state.db_pool, &body)
+        .await
+        .map_err(|e| {
+            if e.to_string().contains("duplicate key") {
+                AppError::Conflict(format!("host_key already exists: {}", body.host_key))
+            } else {
+                AppError::Internal(format!("Failed to create host: {}", e))
+            }
+        })?;
 
     // Pre-register in last_known_status as offline
     state.pre_populate_status(std::slice::from_ref(&host));

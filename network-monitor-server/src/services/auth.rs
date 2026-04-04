@@ -4,7 +4,7 @@ use axum::http::request::Parts;
 use crate::errors::AppError;
 use chrono::Utc;
 use chrono_tz::Asia::Seoul;
-use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
+use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
 
@@ -62,9 +62,9 @@ where
             .and_then(|v| v.to_str().ok())
             .ok_or_else(|| AppError::Unauthorized("Missing Authorization header".to_string()))?;
 
-        let token = auth_header
-            .strip_prefix("Bearer ")
-            .ok_or_else(|| AppError::Unauthorized("Authorization header must use Bearer scheme".to_string()))?;
+        let token = auth_header.strip_prefix("Bearer ").ok_or_else(|| {
+            AppError::Unauthorized("Authorization header must use Bearer scheme".to_string())
+        })?;
 
         // Try agent JWT first, then user JWT
         let decoding_key = DECODING_KEY
@@ -81,14 +81,16 @@ where
             return Ok(AuthGuard);
         }
 
-        Err(AppError::Unauthorized("Invalid or expired token".to_string()))
+        Err(AppError::Unauthorized(
+            "Invalid or expired token".to_string(),
+        ))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use jsonwebtoken::{decode, DecodingKey, Validation};
+    use jsonwebtoken::{DecodingKey, Validation, decode};
 
     // OnceLock is set once per process, so all tests in this suite share the same secret.
     const TEST_SECRET: &str = "test-secret-for-unit-tests";
@@ -108,7 +110,11 @@ mod tests {
         init_encoding_key(TEST_SECRET);
         let token = generate_jwt().expect("JWT generation failed");
         assert!(!token.is_empty());
-        assert_eq!(token.split('.').count(), 3, "JWT must be in header.payload.signature format");
+        assert_eq!(
+            token.split('.').count(),
+            3,
+            "JWT must be in header.payload.signature format"
+        );
     }
 
     #[test]
@@ -116,13 +122,16 @@ mod tests {
         init_encoding_key(TEST_SECRET);
         let token = generate_jwt().expect("JWT generation failed");
         let result = decode::<Claims>(&token, &test_decoding_key(), &test_validation());
-        assert!(result.is_ok(), "Should be decodable with the correct secret");
+        assert!(
+            result.is_ok(),
+            "Should be decodable with the correct secret"
+        );
     }
 
     #[test]
     fn test_jwt_signed_with_wrong_secret_fails_validation() {
         // Use encode/decode directly to avoid OnceLock global state — keeps this test isolated.
-        use jsonwebtoken::{encode, EncodingKey, Header};
+        use jsonwebtoken::{EncodingKey, Header, encode};
         let token = encode(
             &Header::new(Algorithm::HS256),
             &Claims { exp: usize::MAX },
@@ -132,8 +141,15 @@ mod tests {
 
         let mut wrong_validation = test_validation();
         wrong_validation.validate_exp = false;
-        let result = decode::<Claims>(&token, &DecodingKey::from_secret(b"wrong-secret"), &wrong_validation);
-        assert!(result.is_err(), "Validation must fail with the wrong secret");
+        let result = decode::<Claims>(
+            &token,
+            &DecodingKey::from_secret(b"wrong-secret"),
+            &wrong_validation,
+        );
+        assert!(
+            result.is_err(),
+            "Validation must fail with the wrong secret"
+        );
     }
 
     #[test]
@@ -144,6 +160,9 @@ mod tests {
         let data = decode::<Claims>(&token, &test_decoding_key(), &test_validation())
             .expect("Decoding failed");
         let now = Utc::now().timestamp() as usize;
-        assert!(data.claims.exp > now, "exp must be in the future (token expires ~60 seconds from now)");
+        assert!(
+            data.claims.exp > now,
+            "exp must be in the future (token expires ~60 seconds from now)"
+        );
     }
 }

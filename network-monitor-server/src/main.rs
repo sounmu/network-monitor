@@ -9,8 +9,8 @@ mod services;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
-use tower_http::cors::CorsLayer;
 use axum::http::{HeaderValue, Method};
+use tower_http::cors::CorsLayer;
 
 use anyhow::Context;
 use models::app_state::{AppState, MetricsStore};
@@ -27,11 +27,11 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("🚀 Starting network-monitor-server...");
 
     // ── Required environment variables ──
-    let database_url = std::env::var("DATABASE_URL")
-        .context("DATABASE_URL environment variable is not set")?;
+    let database_url =
+        std::env::var("DATABASE_URL").context("DATABASE_URL environment variable is not set")?;
 
-    let jwt_secret = std::env::var("JWT_SECRET")
-        .context("JWT_SECRET environment variable is not set")?;
+    let jwt_secret =
+        std::env::var("JWT_SECRET").context("JWT_SECRET environment variable is not set")?;
     services::auth::init_encoding_key(&jwt_secret);
 
     // ── Optional environment variables with defaults ──
@@ -67,9 +67,9 @@ async fn main() -> anyhow::Result<()> {
     let (sse_tx, _) = tokio::sync::broadcast::channel(sse_buffer);
 
     // ── Shared application state ──
-    let metrics_query_cache = Arc::new(
-        models::app_state::MetricsQueryCache::new(std::time::Duration::from_secs(120)),
-    );
+    let metrics_query_cache = Arc::new(models::app_state::MetricsQueryCache::new(
+        std::time::Duration::from_secs(120),
+    ));
 
     let state = Arc::new(AppState {
         store: Arc::new(RwLock::new(MetricsStore::new())),
@@ -111,7 +111,13 @@ async fn main() -> anyhow::Result<()> {
         tracing::info!("🌐 [CORS] Parsed origins: {:?}", origins);
         CorsLayer::new()
             .allow_origin(origins)
-            .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE, Method::OPTIONS])
+            .allow_methods([
+                Method::GET,
+                Method::POST,
+                Method::PUT,
+                Method::DELETE,
+                Method::OPTIONS,
+            ])
             .allow_headers(tower_http::cors::Any)
     };
     let compression = tower_http::compression::CompressionLayer::new();
@@ -133,7 +139,10 @@ async fn main() -> anyhow::Result<()> {
         .context("Failed to bind server port")?;
 
     tracing::info!("🚀 Server running on http://{}", bind_addr);
-    tracing::info!("   Scrape interval: {}s (DB-driven targets)", scrape_interval_secs);
+    tracing::info!(
+        "   Scrape interval: {}s (DB-driven targets)",
+        scrape_interval_secs
+    );
 
     axum::serve(listener, app)
         .await

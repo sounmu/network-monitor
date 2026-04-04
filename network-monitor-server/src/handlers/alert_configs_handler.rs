@@ -63,11 +63,8 @@ pub async fn update_host_configs(
                 req.metric_type
             )));
         }
-        let row = alert_configs_repo::upsert_alert_config(
-            &state.db_pool,
-            Some(&host_key),
-            req,
-        ).await?;
+        let row =
+            alert_configs_repo::upsert_alert_config(&state.db_pool, Some(&host_key), req).await?;
         results.push(row);
     }
     tracing::info!(host_key = %host_key, "🔔 [AlertConfig] Per-host alert configs updated");

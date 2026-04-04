@@ -1,8 +1,8 @@
-use tracing_appender::non_blocking::WorkerGuard;
-use tracing_subscriber::{fmt, prelude::*, EnvFilter};
-use tracing_subscriber::fmt::time::FormatTime;
 use chrono::Utc;
 use chrono_tz::Asia::Seoul;
+use tracing_appender::non_blocking::WorkerGuard;
+use tracing_subscriber::fmt::time::FormatTime;
+use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
 #[derive(Clone, Debug)]
 struct KstTime;
@@ -24,8 +24,8 @@ pub fn init_tracing() -> WorkerGuard {
         "info"
     };
 
-    let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(default_level));
+    let env_filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_level));
 
     let console_layer = fmt::layer()
         .with_timer(KstTime)

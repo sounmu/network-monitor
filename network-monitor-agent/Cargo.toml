@@ -1,0 +1,35 @@
+[package]
+name = "network-monitor-agent"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = []
+gpu-nvidia = ["dep:nvml-wrapper"]
+gpu-apple = ["dep:macmon"]
+
+[dependencies]
+axum = "0.7"
+bollard = "0.20"
+chrono = "0.4"
+chrono-tz = "0.9"
+anyhow = "1.0"
+dotenvy = "0.15"
+jsonwebtoken = { version = "10.3.0", features = ["rust_crypto"] }
+bincode = "1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sysinfo = "0.34"
+nvml-wrapper = { version = "0.10", optional = true }
+macmon = { version = "0.7", optional = true }
+futures-util = "0.3"
+tokio = { version = "1.0", features = ["full"] }
+tracing = { version = "0.1.44", features = ["attributes"] }
+tracing-appender = "0.2.4"
+tracing-subscriber = { version = "0.3.23", features = ["ansi", "env-filter", "fmt", "json", "registry"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

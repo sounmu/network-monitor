@@ -18,8 +18,9 @@ fn extract_user_id(headers: &HeaderMap) -> Result<i32, AppError> {
         .and_then(|h| h.strip_prefix("Bearer "))
         .ok_or_else(|| AppError::Unauthorized("Missing token".to_string()))?;
 
-    let claims = user_auth::decode_user_jwt(token)
-        .ok_or_else(|| AppError::BadRequest("Dashboard requires user authentication (not API key)".to_string()))?;
+    let claims = user_auth::decode_user_jwt(token).ok_or_else(|| {
+        AppError::BadRequest("Dashboard requires user authentication (not API key)".to_string())
+    })?;
 
     Ok(claims.sub)
 }

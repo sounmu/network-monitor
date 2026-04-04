@@ -45,9 +45,15 @@ pub struct CreateHostRequest {
     pub containers: Vec<String>,
 }
 
-fn default_scrape_interval() -> i32 { 10 }
-fn default_load_threshold() -> f64 { 4.0 }
-fn default_ports() -> Vec<i32> { vec![80, 443] }
+fn default_scrape_interval() -> i32 {
+    10
+}
+fn default_load_threshold() -> f64 {
+    4.0
+}
+fn default_ports() -> Vec<i32> {
+    vec![80, 443]
+}
 
 /// Request body for updating an existing host
 #[derive(Debug, Deserialize)]

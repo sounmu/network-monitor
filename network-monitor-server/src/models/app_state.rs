@@ -37,18 +37,19 @@ impl AppState {
     pub fn pre_populate_status(&self, hosts: &[HostRow]) {
         let mut lks = self.last_known_status.write().expect("RwLock poisoned");
         for host in hosts {
-            lks.entry(host.host_key.clone()).or_insert_with(|| HostStatusPayload {
-                host_key: host.host_key.clone(),
-                display_name: host.display_name.clone(),
-                is_online: false,
-                last_seen: String::new(),
-                docker_containers: vec![],
-                ports: vec![],
-                disks: vec![],
-                processes: vec![],
-                temperatures: vec![],
-                gpus: vec![],
-            });
+            lks.entry(host.host_key.clone())
+                .or_insert_with(|| HostStatusPayload {
+                    host_key: host.host_key.clone(),
+                    display_name: host.display_name.clone(),
+                    is_online: false,
+                    last_seen: String::new(),
+                    docker_containers: vec![],
+                    ports: vec![],
+                    disks: vec![],
+                    processes: vec![],
+                    temperatures: vec![],
+                    gpus: vec![],
+                });
         }
     }
 }
@@ -246,10 +247,13 @@ impl MetricsQueryCache {
     /// Insert a query result into the cache.
     pub fn insert(&self, key: String, data: Vec<MetricsRow>) {
         if let Ok(mut entries) = self.entries.write() {
-            entries.insert(key, CacheEntry {
-                data,
-                inserted_at: Instant::now(),
-            });
+            entries.insert(
+                key,
+                CacheEntry {
+                    data,
+                    inserted_at: Instant::now(),
+                },
+            );
         }
     }
 

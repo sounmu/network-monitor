@@ -43,9 +43,7 @@ pub async fn get_host_configs(
 
 /// Load all alert configs and build a per-host AlertConfig map.
 /// Resolution order: host-specific override → global default.
-pub async fn load_all_as_map(
-    pool: &PgPool,
-) -> Result<HashMap<String, AlertConfig>, sqlx::Error> {
+pub async fn load_all_as_map(pool: &PgPool) -> Result<HashMap<String, AlertConfig>, sqlx::Error> {
     let rows = sqlx::query_as::<_, AlertConfigRow>(
         "SELECT * FROM alert_configs ORDER BY host_key NULLS FIRST, metric_type",
     )
@@ -103,23 +101,29 @@ pub async fn load_all_as_map(
             .map(|r| row_to_rule(r))
             .unwrap_or(global_disk.clone());
 
-        map.insert(hk, AlertConfig {
-            cpu,
-            memory: mem,
-            disk,
-            load_threshold: 4.0, // sourced from the hosts table at scrape time
-            load_cooldown_secs: 60,
-        });
+        map.insert(
+            hk,
+            AlertConfig {
+                cpu,
+                memory: mem,
+                disk,
+                load_threshold: 4.0, // sourced from the hosts table at scrape time
+                load_cooldown_secs: 60,
+            },
+        );
     }
 
     // Store global defaults under "__global__" key as fallback for hosts with no overrides
-    map.insert("__global__".to_string(), AlertConfig {
-        cpu: global_cpu,
-        memory: global_mem,
-        disk: global_disk,
-        load_threshold: 4.0,
-        load_cooldown_secs: 60,
-    });
+    map.insert(
+        "__global__".to_string(),
+        AlertConfig {
+            cpu: global_cpu,
+            memory: global_mem,
+            disk: global_disk,
+            load_threshold: 4.0,
+            load_cooldown_secs: 60,
+        },
+    );
 
     Ok(map)
 }
@@ -201,13 +205,28 @@ fn row_to_rule(row: &AlertConfigRow) -> MetricAlertRule {
 }
 
 fn default_cpu_rule() -> MetricAlertRule {
-    MetricAlertRule { enabled: true, threshold: 80.0, sustained_secs: 300, cooldown_secs: 60 }
+    MetricAlertRule {
+        enabled: true,
+        threshold: 80.0,
+        sustained_secs: 300,
+        cooldown_secs: 60,
+    }
 }
 
 fn default_memory_rule() -> MetricAlertRule {
-    MetricAlertRule { enabled: true, threshold: 90.0, sustained_secs: 300, cooldown_secs: 60 }
+    MetricAlertRule {
+        enabled: true,
+        threshold: 90.0,
+        sustained_secs: 300,
+        cooldown_secs: 60,
+    }
 }
 
 fn default_disk_rule() -> MetricAlertRule {
-    MetricAlertRule { enabled: true, threshold: 90.0, sustained_secs: 0, cooldown_secs: 300 }
+    MetricAlertRule {
+        enabled: true,
+        threshold: 90.0,
+        sustained_secs: 0,
+        cooldown_secs: 300,
+    }
 }

@@ -44,14 +44,12 @@ pub async fn insert_alert(
     alert_type: &str,
     message: &str,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "INSERT INTO alert_history (host_key, alert_type, message) VALUES ($1, $2, $3)",
-    )
-    .bind(host_key)
-    .bind(alert_type)
-    .bind(message)
-    .execute(pool)
-    .await?;
+    sqlx::query("INSERT INTO alert_history (host_key, alert_type, message) VALUES ($1, $2, $3)")
+        .bind(host_key)
+        .bind(alert_type)
+        .bind(message)
+        .execute(pool)
+        .await?;
     Ok(())
 }
 

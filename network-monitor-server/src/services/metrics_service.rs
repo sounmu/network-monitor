@@ -6,7 +6,9 @@ use chrono::{SecondsFormat, Utc};
 
 use crate::errors::AppError;
 use crate::models::agent_metrics::{AgentMetrics, NetworkTotal};
-use crate::models::app_state::{AlertConfig, AlertMetricPoint, AppState, HostRecord, MetricAlertRule};
+use crate::models::app_state::{
+    AlertConfig, AlertMetricPoint, AppState, HostRecord, MetricAlertRule,
+};
 use crate::models::sse_payloads::{HostMetricsPayload, HostStatusPayload, NetworkRate};
 
 /// How long to retain in-memory metric history (10 minutes)
@@ -18,16 +20,54 @@ const STATUS_PERIODIC_INTERVAL_SECS: u64 = 120;
 /// Uses pattern matching instead of string matching for state transitions,
 /// preventing silent bugs caused by message format changes.
 pub enum AlertAction {
-    CpuOverload { hostname: String, sustained_mins: u64, threshold: f64, current: f32 },
-    CpuRecovery { hostname: String, current: f32 },
-    MemoryOverload { hostname: String, sustained_mins: u64, threshold: f64, current: f32 },
-    MemoryRecovery { hostname: String, current: f32 },
-    LoadOverload { hostname: String, load: f64, threshold: f64 },
-    LoadRecovery { hostname: String, load: f64 },
-    PortDown { hostname: String, port: u16 },
-    PortRecovery { hostname: String, port: u16 },
-    DiskOverload { hostname: String, mount_point: String, threshold: f64, current: f32 },
-    DiskRecovery { hostname: String, mount_point: String, current: f32 },
+    CpuOverload {
+        hostname: String,
+        sustained_mins: u64,
+        threshold: f64,
+        current: f32,
+    },
+    CpuRecovery {
+        hostname: String,
+        current: f32,
+    },
+    MemoryOverload {
+        hostname: String,
+        sustained_mins: u64,
+        threshold: f64,
+        current: f32,
+    },
+    MemoryRecovery {
+        hostname: String,
+        current: f32,
+    },
+    LoadOverload {
+        hostname: String,
+        load: f64,
+        threshold: f64,
+    },
+    LoadRecovery {
+        hostname: String,
+        load: f64,
+    },
+    PortDown {
+        hostname: String,
+        port: u16,
+    },
+    PortRecovery {
+        hostname: String,
+        port: u16,
+    },
+    DiskOverload {
+        hostname: String,
+        mount_point: String,
+        threshold: f64,
+        current: f32,
+    },
+    DiskRecovery {
+        hostname: String,
+        mount_point: String,
+        current: f32,
+    },
 }
 
 impl AlertAction {
@@ -50,7 +90,12 @@ impl AlertAction {
     /// Formats a Discord notification message for this alert action.
     pub fn to_message(&self) -> String {
         match self {
-            Self::CpuOverload { hostname, sustained_mins, threshold, current } => format!(
+            Self::CpuOverload {
+                hostname,
+                sustained_mins,
+                threshold,
+                current,
+            } => format!(
                 "🔥 **[CPU Overload]** Host `{}` — CPU usage has been above {:.1}% for the past {} minute(s). (current: {:.1}%)",
                 hostname, threshold, sustained_mins, current
             ),
@@ -58,7 +103,12 @@ impl AlertAction {
                 "✅ **[CPU Recovery]** Host `{}` — CPU usage has returned to normal. (current: {:.1}%)",
                 hostname, current
             ),
-            Self::MemoryOverload { hostname, sustained_mins, threshold, current } => format!(
+            Self::MemoryOverload {
+                hostname,
+                sustained_mins,
+                threshold,
+                current,
+            } => format!(
                 "🔥 **[Memory Overload]** Host `{}` — Memory usage has been above {:.1}% for the past {} minute(s). (current: {:.1}%)",
                 hostname, threshold, sustained_mins, current
             ),
@@ -66,7 +116,11 @@ impl AlertAction {
                 "✅ **[Memory Recovery]** Host `{}` — Memory usage has returned to normal. (current: {:.1}%)",
                 hostname, current
             ),
-            Self::LoadOverload { hostname, load, threshold } => format!(
+            Self::LoadOverload {
+                hostname,
+                load,
+                threshold,
+            } => format!(
                 "⚡ **[High Load]** Host `{}` — Load Average (1 min) is {:.2}, exceeding threshold {:.1}!",
                 hostname, load, threshold
             ),
@@ -82,11 +136,20 @@ impl AlertAction {
                 "✅ **[Port Recovery]** Host `{}` — port `{}` is open again.",
                 hostname, port
             ),
-            Self::DiskOverload { hostname, mount_point, threshold, current } => format!(
+            Self::DiskOverload {
+                hostname,
+                mount_point,
+                threshold,
+                current,
+            } => format!(
                 "💾 **[Disk Full]** Host `{}` — disk `{}` usage is {:.1}%, exceeding threshold {:.1}%!",
                 hostname, mount_point, current, threshold
             ),
-            Self::DiskRecovery { hostname, mount_point, current } => format!(
+            Self::DiskRecovery {
+                hostname,
+                mount_point,
+                current,
+            } => format!(
                 "✅ **[Disk Recovery]** Host `{}` — disk `{}` usage has returned to normal. (current: {:.1}%)",
                 hostname, mount_point, current
             ),
@@ -156,7 +219,11 @@ pub async fn process_metrics(
 
         // ── status SSE payload (only generated on change detection or periodic interval) ──
         // Built before the metrics payload so that server_ts ownership can be moved.
-        let new_hash = compute_status_hash(&metrics.docker_containers, &metrics.ports, &metrics.system.disks);
+        let new_hash = compute_status_hash(
+            &metrics.docker_containers,
+            &metrics.ports,
+            &metrics.system.disks,
+        );
         let now = Instant::now();
         let periodic_elapsed = record
             .last_status_sent
@@ -167,18 +234,21 @@ pub async fn process_metrics(
             record.prev_status_hash = Some(new_hash);
             record.last_status_sent = Some(now);
             let ts_clone = server_ts.clone();
-            (Some(HostStatusPayload {
-                host_key: target_str.clone(),
-                display_name: hostname.clone(),
-                is_online: metrics.is_online,
-                last_seen: server_ts,
-                docker_containers: metrics.docker_containers.clone(),
-                ports: metrics.ports.clone(),
-                disks: metrics.system.disks.clone(),
-                processes: metrics.system.processes.clone(),
-                temperatures: metrics.system.temperatures.clone(),
-                gpus: metrics.system.gpus.clone(),
-            }), ts_clone)
+            (
+                Some(HostStatusPayload {
+                    host_key: target_str.clone(),
+                    display_name: hostname.clone(),
+                    is_online: metrics.is_online,
+                    last_seen: server_ts,
+                    docker_containers: metrics.docker_containers.clone(),
+                    ports: metrics.ports.clone(),
+                    disks: metrics.system.disks.clone(),
+                    processes: metrics.system.processes.clone(),
+                    temperatures: metrics.system.temperatures.clone(),
+                    gpus: metrics.system.gpus.clone(),
+                }),
+                ts_clone,
+            )
         } else {
             (None, server_ts)
         };
@@ -207,7 +277,12 @@ pub async fn process_metrics(
             "📊 [Store] Recorded metrics"
         );
 
-        (alert_actions, history_count, metrics_payload, status_payload)
+        (
+            alert_actions,
+            history_count,
+            metrics_payload,
+            status_payload,
+        )
         // ← RwLockWriteGuard is dropped here, releasing the lock immediately
     };
 
@@ -219,8 +294,13 @@ pub async fn process_metrics(
 
         // Log to alert_history (best-effort, don't block on failure)
         if let Err(e) = crate::repositories::alert_history_repo::insert_alert(
-            &state.db_pool, target, action.alert_type_str(), &message,
-        ).await {
+            &state.db_pool,
+            target,
+            action.alert_type_str(),
+            &message,
+        )
+        .await
+        {
             tracing::error!(err = ?e, "⚠️ [AlertHistory] Failed to log alert");
         }
     }
@@ -360,7 +440,11 @@ fn collect_cpu_alerts(
     let all_high = recent_points
         .iter()
         .all(|p| p.cpu_usage_percent as f64 > rule.threshold);
-    let latest_cpu = record.alert_history.back().map(|p| p.cpu_usage_percent).unwrap_or(0.0);
+    let latest_cpu = record
+        .alert_history
+        .back()
+        .map(|p| p.cpu_usage_percent)
+        .unwrap_or(0.0);
 
     if all_high {
         if !record.alert_state.cpu_alerted
@@ -408,7 +492,11 @@ fn collect_memory_alerts(
     let all_high = recent_points
         .iter()
         .all(|p| p.memory_usage_percent as f64 > rule.threshold);
-    let latest_mem = record.alert_history.back().map(|p| p.memory_usage_percent).unwrap_or(0.0);
+    let latest_mem = record
+        .alert_history
+        .back()
+        .map(|p| p.memory_usage_percent)
+        .unwrap_or(0.0);
 
     if all_high {
         if !record.alert_state.memory_alerted
@@ -443,7 +531,10 @@ fn collect_load_alerts(
 
     if load_1min > threshold {
         if !record.alert_state.load_alerted
-            && cooldown_elapsed(record.alert_state.last_load_alert, alert_config.load_cooldown_secs)
+            && cooldown_elapsed(
+                record.alert_state.last_load_alert,
+                alert_config.load_cooldown_secs,
+            )
         {
             actions.push(AlertAction::LoadOverload {
                 hostname: hostname.to_string(),
@@ -502,7 +593,12 @@ fn collect_disk_alerts(
     for disk in &metrics.system.disks {
         let mount = &disk.mount_point;
         let usage = disk.usage_percent;
-        let was_alerted = record.alert_state.disk_alerted.get(mount).copied().unwrap_or(false);
+        let was_alerted = record
+            .alert_state
+            .disk_alerted
+            .get(mount)
+            .copied()
+            .unwrap_or(false);
 
         if (usage as f64) > rule.threshold {
             if !was_alerted
@@ -570,7 +666,10 @@ fn update_alert_state_after_send(record: &mut HostRecord, actions: &[AlertAction
                 record.alert_state.port_alerted.remove(port);
             }
             AlertAction::DiskOverload { mount_point, .. } => {
-                record.alert_state.disk_alerted.insert(mount_point.clone(), true);
+                record
+                    .alert_state
+                    .disk_alerted
+                    .insert(mount_point.clone(), true);
                 record.alert_state.last_disk_alert = Some(now);
             }
             AlertAction::DiskRecovery { mount_point, .. } => {
@@ -587,7 +686,9 @@ fn update_alert_state_after_send(record: &mut HostRecord, actions: &[AlertAction
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::agent_metrics::{AgentMetrics, LoadAverage, NetworkTotal, PortStatus, SystemMetrics};
+    use crate::models::agent_metrics::{
+        AgentMetrics, LoadAverage, NetworkTotal, PortStatus, SystemMetrics,
+    };
     use crate::models::app_state::{AlertConfig, AlertMetricPoint, HostRecord, MetricAlertRule};
 
     const TEST_HOSTNAME: &str = "test-host";
@@ -607,7 +708,10 @@ mod tests {
                 temperatures: vec![],
                 gpus: vec![],
             },
-            network: NetworkTotal { total_rx_bytes: 0, total_tx_bytes: 0 },
+            network: NetworkTotal {
+                total_rx_bytes: 0,
+                total_tx_bytes: 0,
+            },
             load_average: LoadAverage {
                 one_min: load,
                 five_min: 0.0,
@@ -694,7 +798,10 @@ mod tests {
             state: "running".to_string(),
             status: "Up 2 hours".to_string(),
         }];
-        let ports = vec![PortStatus { port: 80, is_open: true }];
+        let ports = vec![PortStatus {
+            port: 80,
+            is_open: true,
+        }];
         let h1 = compute_status_hash(&containers, &ports, &[]);
         let h2 = compute_status_hash(&containers, &ports, &[]);
         assert_eq!(h1, h2);
@@ -715,8 +822,14 @@ mod tests {
             state: "exited".to_string(),
             status: "Exited (1) 5 minutes ago".to_string(),
         }];
-        let ports = vec![PortStatus { port: 80, is_open: true }];
-        assert_ne!(compute_status_hash(&running, &ports, &[]), compute_status_hash(&exited, &ports, &[]));
+        let ports = vec![PortStatus {
+            port: 80,
+            is_open: true,
+        }];
+        assert_ne!(
+            compute_status_hash(&running, &ports, &[]),
+            compute_status_hash(&exited, &ports, &[])
+        );
     }
 
     // ── collect_load_alerts ──────────────────────
@@ -830,7 +943,10 @@ mod tests {
         rule.enabled = false;
         let mut actions = Vec::new();
         collect_cpu_alerts(&record, TEST_HOSTNAME, &rule, &mut actions);
-        assert!(actions.is_empty(), "A disabled rule must not generate alerts");
+        assert!(
+            actions.is_empty(),
+            "A disabled rule must not generate alerts"
+        );
     }
 
     // ── collect_memory_alerts ────────────────────
@@ -871,7 +987,10 @@ mod tests {
         rule.enabled = false;
         let mut actions = Vec::new();
         collect_memory_alerts(&record, TEST_HOSTNAME, &rule, &mut actions);
-        assert!(actions.is_empty(), "A disabled rule must not generate alerts");
+        assert!(
+            actions.is_empty(),
+            "A disabled rule must not generate alerts"
+        );
     }
 
     // ── collect_port_alerts ──────────────────────
@@ -879,7 +998,14 @@ mod tests {
     #[test]
     fn test_port_down_fires_first_time() {
         let record = make_record();
-        let metrics = make_metrics(1.0, 10.0, vec![PortStatus { port: 80, is_open: false }]);
+        let metrics = make_metrics(
+            1.0,
+            10.0,
+            vec![PortStatus {
+                port: 80,
+                is_open: false,
+            }],
+        );
         let mut actions = Vec::new();
         collect_port_alerts(&record, TEST_HOSTNAME, &metrics, &mut actions);
         assert_eq!(actions.len(), 1);
@@ -890,7 +1016,14 @@ mod tests {
     fn test_port_down_no_duplicate_alert() {
         let mut record = make_record();
         record.alert_state.port_alerted.insert(80, Instant::now());
-        let metrics = make_metrics(1.0, 10.0, vec![PortStatus { port: 80, is_open: false }]);
+        let metrics = make_metrics(
+            1.0,
+            10.0,
+            vec![PortStatus {
+                port: 80,
+                is_open: false,
+            }],
+        );
         let mut actions = Vec::new();
         collect_port_alerts(&record, TEST_HOSTNAME, &metrics, &mut actions);
         assert!(actions.is_empty());
@@ -900,17 +1033,34 @@ mod tests {
     fn test_port_recovery_fires_when_was_down() {
         let mut record = make_record();
         record.alert_state.port_alerted.insert(8080, Instant::now());
-        let metrics = make_metrics(1.0, 10.0, vec![PortStatus { port: 8080, is_open: true }]);
+        let metrics = make_metrics(
+            1.0,
+            10.0,
+            vec![PortStatus {
+                port: 8080,
+                is_open: true,
+            }],
+        );
         let mut actions = Vec::new();
         collect_port_alerts(&record, TEST_HOSTNAME, &metrics, &mut actions);
         assert_eq!(actions.len(), 1);
-        assert!(matches!(actions[0], AlertAction::PortRecovery { port: 8080, .. }));
+        assert!(matches!(
+            actions[0],
+            AlertAction::PortRecovery { port: 8080, .. }
+        ));
     }
 
     #[test]
     fn test_port_open_silent_when_always_open() {
         let record = make_record();
-        let metrics = make_metrics(1.0, 10.0, vec![PortStatus { port: 443, is_open: true }]);
+        let metrics = make_metrics(
+            1.0,
+            10.0,
+            vec![PortStatus {
+                port: 443,
+                is_open: true,
+            }],
+        );
         let mut actions = Vec::new();
         collect_port_alerts(&record, TEST_HOSTNAME, &metrics, &mut actions);
         assert!(actions.is_empty());
@@ -922,7 +1072,10 @@ mod tests {
     fn test_state_update_cpu_overload() {
         let mut record = make_record();
         let actions = vec![AlertAction::CpuOverload {
-            hostname: "test".to_string(), sustained_mins: 5, threshold: 80.0, current: 90.0,
+            hostname: "test".to_string(),
+            sustained_mins: 5,
+            threshold: 80.0,
+            current: 90.0,
         }];
         update_alert_state_after_send(&mut record, &actions);
         assert!(record.alert_state.cpu_alerted);
@@ -934,7 +1087,8 @@ mod tests {
         let mut record = make_record();
         record.alert_state.cpu_alerted = true;
         let actions = vec![AlertAction::CpuRecovery {
-            hostname: "test".to_string(), current: 50.0,
+            hostname: "test".to_string(),
+            current: 50.0,
         }];
         update_alert_state_after_send(&mut record, &actions);
         assert!(!record.alert_state.cpu_alerted);
@@ -944,7 +1098,10 @@ mod tests {
     fn test_state_update_memory_overload() {
         let mut record = make_record();
         let actions = vec![AlertAction::MemoryOverload {
-            hostname: "test".to_string(), sustained_mins: 5, threshold: 90.0, current: 95.0,
+            hostname: "test".to_string(),
+            sustained_mins: 5,
+            threshold: 90.0,
+            current: 95.0,
         }];
         update_alert_state_after_send(&mut record, &actions);
         assert!(record.alert_state.memory_alerted);
@@ -956,7 +1113,8 @@ mod tests {
         let mut record = make_record();
         record.alert_state.memory_alerted = true;
         let actions = vec![AlertAction::MemoryRecovery {
-            hostname: "test".to_string(), current: 50.0,
+            hostname: "test".to_string(),
+            current: 50.0,
         }];
         update_alert_state_after_send(&mut record, &actions);
         assert!(!record.alert_state.memory_alerted);
@@ -966,7 +1124,8 @@ mod tests {
     fn test_state_update_port_down_inserts_entry() {
         let mut record = make_record();
         let actions = vec![AlertAction::PortDown {
-            hostname: "test-host".to_string(), port: 80,
+            hostname: "test-host".to_string(),
+            port: 80,
         }];
         update_alert_state_after_send(&mut record, &actions);
         assert!(record.alert_state.port_alerted.contains_key(&80));
@@ -977,7 +1136,8 @@ mod tests {
         let mut record = make_record();
         record.alert_state.port_alerted.insert(443, Instant::now());
         let actions = vec![AlertAction::PortRecovery {
-            hostname: "test-host".to_string(), port: 443,
+            hostname: "test-host".to_string(),
+            port: 443,
         }];
         update_alert_state_after_send(&mut record, &actions);
         assert!(!record.alert_state.port_alerted.contains_key(&443));

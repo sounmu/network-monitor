@@ -10,10 +10,7 @@ pub mod kst_date_format {
     use super::*;
     use serde::{self, Deserialize, Deserializer, Serializer};
 
-    pub fn serialize<S>(
-        date: &DateTime<Utc>,
-        serializer: S,
-    ) -> Result<S::Ok, S::Error>
+    pub fn serialize<S>(date: &DateTime<Utc>, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
@@ -22,9 +19,7 @@ pub mod kst_date_format {
         serializer.serialize_str(&s)
     }
 
-    pub fn deserialize<'de, D>(
-        deserializer: D,
-    ) -> Result<DateTime<Utc>, D::Error>
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<DateTime<Utc>, D::Error>
     where
         D: Deserializer<'de>,
     {
@@ -83,9 +78,12 @@ pub async fn init_db(pool: &PgPool) -> Result<(), sqlx::Error> {
 
     // Migration: add JSONB columns if missing (for existing databases)
     for col in ["disks", "processes", "temperatures", "gpus"] {
-        sqlx::query(&format!("ALTER TABLE metrics ADD COLUMN IF NOT EXISTS {} JSONB", col))
-            .execute(pool)
-            .await?;
+        sqlx::query(&format!(
+            "ALTER TABLE metrics ADD COLUMN IF NOT EXISTS {} JSONB",
+            col
+        ))
+        .execute(pool)
+        .await?;
     }
 
     // Composite index: (host_key, timestamp DESC) — optimised for dashboard time-series queries
@@ -287,7 +285,9 @@ pub async fn init_db(pool: &PgPool) -> Result<(), sqlx::Error> {
     crate::repositories::http_monitors_repo::init_tables(pool).await?;
     crate::repositories::ping_monitors_repo::init_tables(pool).await?;
 
-    tracing::info!("✅ [DB] Tables ready: metrics (TimescaleDB), hosts, alert_configs, notification_channels.");
+    tracing::info!(
+        "✅ [DB] Tables ready: metrics (TimescaleDB), hosts, alert_configs, notification_channels."
+    );
     Ok(())
 }
 
@@ -456,9 +456,9 @@ pub async fn fetch_metrics_range(
         // Network bytes are cumulative counters — MAX gives the end-of-bucket value,
         // which is correct for the frontend's consecutive-point rate calculation.
         let bucket_interval = if hours <= 72 {
-            "1 minute"   // 6h–3d: ~4,320 buckets max
+            "1 minute" // 6h–3d: ~4,320 buckets max
         } else if hours <= 336 {
-            "5 minutes"  // 3d–14d: ~4,032 buckets max
+            "5 minutes" // 3d–14d: ~4,032 buckets max
         } else {
             "15 minutes" // >14d: ~2,880 buckets max
         };
@@ -526,10 +526,7 @@ pub mod kst_date_format_opt {
     use super::*;
     use serde::{self, Deserializer, Serializer};
 
-    pub fn serialize<S>(
-        date: &Option<DateTime<Utc>>,
-        serializer: S,
-    ) -> Result<S::Ok, S::Error>
+    pub fn serialize<S>(date: &Option<DateTime<Utc>>, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
@@ -539,9 +536,7 @@ pub mod kst_date_format_opt {
         }
     }
 
-    pub fn deserialize<'de, D>(
-        deserializer: D,
-    ) -> Result<Option<DateTime<Utc>>, D::Error>
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<DateTime<Utc>>, D::Error>
     where
         D: Deserializer<'de>,
     {

@@ -98,7 +98,10 @@ pub async fn get_enabled(pool: &PgPool) -> Result<Vec<PingMonitor>, sqlx::Error>
         .await
 }
 
-pub async fn create(pool: &PgPool, req: &CreatePingMonitorRequest) -> Result<PingMonitor, sqlx::Error> {
+pub async fn create(
+    pool: &PgPool,
+    req: &CreatePingMonitorRequest,
+) -> Result<PingMonitor, sqlx::Error> {
     sqlx::query_as::<_, PingMonitor>(
         r#"
         INSERT INTO ping_monitors (name, host, interval_secs, timeout_ms, enabled)
@@ -115,7 +118,11 @@ pub async fn create(pool: &PgPool, req: &CreatePingMonitorRequest) -> Result<Pin
     .await
 }
 
-pub async fn update(pool: &PgPool, id: i32, req: &UpdatePingMonitorRequest) -> Result<Option<PingMonitor>, sqlx::Error> {
+pub async fn update(
+    pool: &PgPool,
+    id: i32,
+    req: &UpdatePingMonitorRequest,
+) -> Result<Option<PingMonitor>, sqlx::Error> {
     sqlx::query_as::<_, PingMonitor>(
         r#"
         UPDATE ping_monitors

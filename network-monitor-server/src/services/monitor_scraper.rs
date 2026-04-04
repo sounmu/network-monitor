@@ -15,8 +15,10 @@ const MIN_INTERVAL_SECS: u64 = 10;
 pub fn spawn_monitor_scraper(state: Arc<AppState>) {
     tokio::spawn(async move {
         // Track last check time per monitor
-        let mut http_last_checked: std::collections::HashMap<i32, Instant> = std::collections::HashMap::new();
-        let mut ping_last_checked: std::collections::HashMap<i32, Instant> = std::collections::HashMap::new();
+        let mut http_last_checked: std::collections::HashMap<i32, Instant> =
+            std::collections::HashMap::new();
+        let mut ping_last_checked: std::collections::HashMap<i32, Instant> =
+            std::collections::HashMap::new();
 
         loop {
             tokio::time::sleep(Duration::from_secs(MIN_INTERVAL_SECS)).await;
@@ -73,14 +75,23 @@ async fn check_http_endpoint(
             let elapsed = start.elapsed().as_millis() as i32;
             let status = response.status().as_u16() as i32;
             let error = if status != monitor.expected_status {
-                Some(format!("Expected status {}, got {}", monitor.expected_status, status))
+                Some(format!(
+                    "Expected status {}, got {}",
+                    monitor.expected_status, status
+                ))
             } else {
                 None
             };
 
             if let Err(e) = http_monitors_repo::insert_result(
-                pool, monitor.id, Some(status), Some(elapsed), error.as_deref(),
-            ).await {
+                pool,
+                monitor.id,
+                Some(status),
+                Some(elapsed),
+                error.as_deref(),
+            )
+            .await
+            {
                 tracing::error!(monitor_id = monitor.id, err = ?e, "⚠️ [HTTP Monitor] Failed to store result");
             }
         }
@@ -93,18 +104,21 @@ async fn check_http_endpoint(
             };
 
             if let Err(e) = http_monitors_repo::insert_result(
-                pool, monitor.id, None, Some(elapsed), Some(&error_msg),
-            ).await {
+                pool,
+                monitor.id,
+                None,
+                Some(elapsed),
+                Some(&error_msg),
+            )
+            .await
+            {
                 tracing::error!(monitor_id = monitor.id, err = ?e, "⚠️ [HTTP Monitor] Failed to store result");
             }
         }
     }
 }
 
-async fn check_ping_host(
-    pool: &PgPool,
-    monitor: &ping_monitors_repo::PingMonitor,
-) {
+async fn check_ping_host(pool: &PgPool, monitor: &ping_monitors_repo::PingMonitor) {
     let timeout = Duration::from_millis(monitor.timeout_ms.max(1000) as u64);
 
     // Use tokio TCP connect as a cross-platform "ping" alternative.
@@ -120,17 +134,28 @@ async fn check_ping_host(
     match tokio::time::timeout(timeout, tokio::net::TcpStream::connect(&target)).await {
         Ok(Ok(_)) => {
             let rtt = start.elapsed().as_secs_f64() * 1000.0;
-            let _ = ping_monitors_repo::insert_result(pool, monitor.id, Some(rtt), true, None).await;
+            let _ =
+                ping_monitors_repo::insert_result(pool, monitor.id, Some(rtt), true, None).await;
         }
         Ok(Err(e)) => {
             let _ = ping_monitors_repo::insert_result(
-                pool, monitor.id, None, false, Some(&e.to_string()),
-            ).await;
+                pool,
+                monitor.id,
+                None,
+                false,
+                Some(&e.to_string()),
+            )
+            .await;
         }
         Err(_) => {
             let _ = ping_monitors_repo::insert_result(
-                pool, monitor.id, None, false, Some(&format!("Timeout after {}ms", monitor.timeout_ms)),
-            ).await;
+                pool,
+                monitor.id,
+                None,
+                false,
+                Some(&format!("Timeout after {}ms", monitor.timeout_ms)),
+            )
+            .await;
         }
     }
 }

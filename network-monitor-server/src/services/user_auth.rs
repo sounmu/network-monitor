@@ -1,7 +1,7 @@
-use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use argon2::password_hash::SaltString;
 use argon2::password_hash::rand_core::OsRng;
-use jsonwebtoken::{decode, encode, Algorithm, Header, Validation};
+use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
+use jsonwebtoken::{Algorithm, Header, Validation, decode, encode};
 use serde::{Deserialize, Serialize};
 
 use super::auth::{DECODING_KEY, ENCODING_KEY};
@@ -38,7 +38,11 @@ pub fn verify_password(password: &str, hash: &str) -> bool {
 }
 
 /// Generate a user JWT (24-hour expiry)
-pub fn generate_user_jwt(user_id: i32, username: &str, role: &str) -> Result<String, jsonwebtoken::errors::Error> {
+pub fn generate_user_jwt(
+    user_id: i32,
+    username: &str,
+    role: &str,
+) -> Result<String, jsonwebtoken::errors::Error> {
     let exp = chrono::Utc::now().timestamp() as usize + 24 * 60 * 60;
     let claims = UserClaims {
         sub: user_id,

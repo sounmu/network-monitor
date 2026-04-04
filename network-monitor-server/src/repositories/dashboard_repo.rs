@@ -29,13 +29,14 @@ pub async fn init_table(pool: &PgPool) -> Result<(), sqlx::Error> {
 }
 
 /// Get dashboard layout for a user (returns None if not customized yet)
-pub async fn get_layout(pool: &PgPool, user_id: i32) -> Result<Option<DashboardLayout>, sqlx::Error> {
-    sqlx::query_as::<_, DashboardLayout>(
-        "SELECT * FROM dashboard_layouts WHERE user_id = $1",
-    )
-    .bind(user_id)
-    .fetch_optional(pool)
-    .await
+pub async fn get_layout(
+    pool: &PgPool,
+    user_id: i32,
+) -> Result<Option<DashboardLayout>, sqlx::Error> {
+    sqlx::query_as::<_, DashboardLayout>("SELECT * FROM dashboard_layouts WHERE user_id = $1")
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await
 }
 
 /// Save or update dashboard layout for a user

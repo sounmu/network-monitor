@@ -3,7 +3,10 @@ use std::sync::Arc;
 use axum::Router;
 use axum::routing::{get, post};
 
-use crate::handlers::{alert_configs_handler, alert_history_handler, auth_handler, dashboard_handler, hosts_handler, metrics_handler, monitors_handler, notification_channels_handler, sse_handler};
+use crate::handlers::{
+    alert_configs_handler, alert_history_handler, auth_handler, dashboard_handler, hosts_handler,
+    metrics_handler, monitors_handler, notification_channels_handler, sse_handler,
+};
 use crate::models::app_state::AppState;
 
 /// Assemble and return the full application router.
@@ -13,7 +16,10 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         // Prometheus metrics export (no auth — designed for Prometheus scraper)
         .route("/metrics", get(metrics_handler::prometheus_metrics))
         // Metrics query
-        .route("/api/metrics/{host_key}", get(metrics_handler::get_metrics_by_host_key))
+        .route(
+            "/api/metrics/{host_key}",
+            get(metrics_handler::get_metrics_by_host_key),
+        )
         // Auth (login/setup are unauthenticated)
         .route("/api/auth/login", post(auth_handler::login))
         .route("/api/auth/setup", post(auth_handler::setup))
@@ -22,15 +28,17 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         // Dashboard layout
         .route(
             "/api/dashboard",
-            get(dashboard_handler::get_dashboard)
-                .put(dashboard_handler::save_dashboard),
+            get(dashboard_handler::get_dashboard).put(dashboard_handler::save_dashboard),
         )
         // Uptime
         .route("/api/uptime/{host_key}", get(metrics_handler::get_uptime))
         // Public status page (no auth required)
         .route("/api/public/status", get(metrics_handler::public_status))
         // Host CRUD
-        .route("/api/hosts", get(hosts_handler::list_hosts).post(hosts_handler::create_host))
+        .route(
+            "/api/hosts",
+            get(hosts_handler::list_hosts).post(hosts_handler::create_host),
+        )
         .route(
             "/api/hosts/{host_key}",
             get(hosts_handler::get_host)
@@ -67,31 +75,44 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         // HTTP monitors
         .route(
             "/api/http-monitors",
-            get(monitors_handler::list_http_monitors)
-                .post(monitors_handler::create_http_monitor),
+            get(monitors_handler::list_http_monitors).post(monitors_handler::create_http_monitor),
         )
-        .route("/api/http-monitors/summaries", get(monitors_handler::get_http_summaries))
+        .route(
+            "/api/http-monitors/summaries",
+            get(monitors_handler::get_http_summaries),
+        )
         .route(
             "/api/http-monitors/{id}",
             axum::routing::put(monitors_handler::update_http_monitor)
                 .delete(monitors_handler::delete_http_monitor),
         )
-        .route("/api/http-monitors/{id}/results", get(monitors_handler::get_http_results))
+        .route(
+            "/api/http-monitors/{id}/results",
+            get(monitors_handler::get_http_results),
+        )
         // Ping monitors
         .route(
             "/api/ping-monitors",
-            get(monitors_handler::list_ping_monitors)
-                .post(monitors_handler::create_ping_monitor),
+            get(monitors_handler::list_ping_monitors).post(monitors_handler::create_ping_monitor),
         )
-        .route("/api/ping-monitors/summaries", get(monitors_handler::get_ping_summaries))
+        .route(
+            "/api/ping-monitors/summaries",
+            get(monitors_handler::get_ping_summaries),
+        )
         .route(
             "/api/ping-monitors/{id}",
             axum::routing::put(monitors_handler::update_ping_monitor)
                 .delete(monitors_handler::delete_ping_monitor),
         )
-        .route("/api/ping-monitors/{id}/results", get(monitors_handler::get_ping_results))
+        .route(
+            "/api/ping-monitors/{id}/results",
+            get(monitors_handler::get_ping_results),
+        )
         // Alert history
-        .route("/api/alert-history", get(alert_history_handler::get_alert_history))
+        .route(
+            "/api/alert-history",
+            get(alert_history_handler::get_alert_history),
+        )
         // SSE real-time stream
         .route("/api/stream", get(sse_handler::sse_handler))
         .with_state(state)

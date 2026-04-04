@@ -33,7 +33,9 @@ pub async fn login(
         .ok_or_else(|| AppError::Unauthorized("Invalid username or password".to_string()))?;
 
     if !user_auth::verify_password(&body.password, &user.password_hash) {
-        return Err(AppError::Unauthorized("Invalid username or password".to_string()));
+        return Err(AppError::Unauthorized(
+            "Invalid username or password".to_string(),
+        ));
     }
 
     let token = user_auth::generate_user_jwt(user.id, &user.username, &user.role)

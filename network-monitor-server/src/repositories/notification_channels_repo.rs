@@ -40,11 +40,9 @@ pub async fn init_table(pool: &PgPool) -> Result<(), sqlx::Error> {
 
 /// Fetch all notification channels
 pub async fn get_all(pool: &PgPool) -> Result<Vec<NotificationChannelRow>, sqlx::Error> {
-    sqlx::query_as::<_, NotificationChannelRow>(
-        "SELECT * FROM notification_channels ORDER BY id",
-    )
-    .fetch_all(pool)
-    .await
+    sqlx::query_as::<_, NotificationChannelRow>("SELECT * FROM notification_channels ORDER BY id")
+        .fetch_all(pool)
+        .await
 }
 
 /// Fetch only enabled notification channels

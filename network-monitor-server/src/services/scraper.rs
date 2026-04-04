@@ -1,9 +1,9 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use reqwest::Client;
-use futures::stream::{self, StreamExt};
 use chrono::{SecondsFormat, Utc};
+use futures::stream::{self, StreamExt};
+use reqwest::Client;
 
 use crate::models::agent_metrics::AgentMetrics;
 use crate::models::app_state::{AlertConfig, AppState, HostRecord};
@@ -75,9 +75,15 @@ async fn scrape_all(client: &Client, state: &Arc<AppState>) {
         async move {
             let url = host.host_key.clone();
             let result = scrape_one(
-                &client, &host.host_key, &host.display_name,
-                &ports, &containers, &alert_config, &state,
-            ).await;
+                &client,
+                &host.host_key,
+                &host.display_name,
+                &ports,
+                &containers,
+                &alert_config,
+                &state,
+            )
+            .await;
             (url, result)
         }
     });
@@ -101,7 +107,11 @@ async fn scrape_all(client: &Client, state: &Arc<AppState>) {
     }
 
     if fail_count > 0 {
-        tracing::info!(success = success_count, fail = fail_count, "📊 [Scraper Summary]");
+        tracing::info!(
+            success = success_count,
+            fail = fail_count,
+            "📊 [Scraper Summary]"
+        );
     }
 }
 
@@ -114,7 +124,11 @@ async fn scrape_one(
     alert_config: &AlertConfig,
     state: &Arc<AppState>,
 ) -> Result<(), String> {
-    let ports_str = ports.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(",");
+    let ports_str = ports
+        .iter()
+        .map(|p| p.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
     let containers_str = containers.join(",");
 
     let mut url_str = format!("http://{}/metrics?", target);
@@ -130,7 +144,12 @@ async fn scrape_one(
         Err(e) => return Err(format!("JWT Generation Error: {}", e)),
     };
 
-    match client.get(&url_str).header("Authorization", format!("Bearer {}", jwt_token)).send().await {
+    match client
+        .get(&url_str)
+        .header("Authorization", format!("Bearer {}", jwt_token))
+        .send()
+        .await
+    {
         Ok(resp) if resp.status().is_success() => match resp.bytes().await {
             Ok(bytes) => match bincode::deserialize::<AgentMetrics>(&bytes) {
                 Ok(metrics) => {
@@ -163,9 +182,9 @@ async fn handle_success(
     state: &Arc<AppState>,
 ) {
     // Auto-register host and update display_name if needed
-    if let Err(e) = hosts_repo::ensure_host_registered(
-        &state.db_pool, target, &metrics.hostname,
-    ).await {
+    if let Err(e) =
+        hosts_repo::ensure_host_registered(&state.db_pool, target, &metrics.hostname).await
+    {
         tracing::warn!(err = ?e, "⚠️ [Scraper] Failed to auto-register host");
     }
 
@@ -173,7 +192,9 @@ async fn handle_success(
         Ok(result) => {
             tracing::info!(target = %target, "✅ [Scraper] {}", result.log_msg);
 
-            let _ = state.sse_tx.send(SseBroadcast::Metrics(result.metrics_payload));
+            let _ = state
+                .sse_tx
+                .send(SseBroadcast::Metrics(result.metrics_payload));
 
             if let Some(status_payload) = result.status_payload {
                 if let Ok(mut lks) = state.last_known_status.write() {
@@ -182,7 +203,9 @@ async fn handle_success(
                 let _ = state.sse_tx.send(SseBroadcast::Status(status_payload));
             }
         }
-        Err(e) => tracing::error!(target = %target, err = ?e, "⚠️  [Scraper] process_metrics error"),
+        Err(e) => {
+            tracing::error!(target = %target, err = ?e, "⚠️  [Scraper] process_metrics error")
+        }
     }
 
     // Recovery (host back online) alert
@@ -198,8 +221,8 @@ async fn handle_success(
 
         if record.alert_state.offline_alerted {
             let last_offline = record.alert_state.last_offline_alert;
-            let cooldown_passed = last_offline
-                .is_none_or(|t| t.elapsed() > Duration::from_secs(FLAP_COOLDOWN_SECS));
+            let cooldown_passed =
+                last_offline.is_none_or(|t| t.elapsed() > Duration::from_secs(FLAP_COOLDOWN_SECS));
 
             if cooldown_passed {
                 record.alert_state.offline_alerted = false;
@@ -219,8 +242,12 @@ async fn handle_success(
     if let Some(msg) = recovery_msg {
         alert_service::send_alert(&state.http_client, &state.db_pool, &msg).await;
         let _ = crate::repositories::alert_history_repo::insert_alert(
-            &state.db_pool, target, "host_recovery", &msg,
-        ).await;
+            &state.db_pool,
+            target,
+            "host_recovery",
+            &msg,
+        )
+        .await;
     }
 }
 
@@ -256,24 +283,34 @@ async fn handle_down(target: &str, display_name: &str, state: &Arc<AppState>) {
             is_online: false,
             last_seen: server_ts,
             docker_containers: state
-                .last_known_status.read().ok()
+                .last_known_status
+                .read()
+                .ok()
                 .and_then(|lks| lks.get(&host_key).map(|s| s.docker_containers.clone()))
                 .unwrap_or_default(),
             ports: state
-                .last_known_status.read().ok()
+                .last_known_status
+                .read()
+                .ok()
                 .and_then(|lks| lks.get(&host_key).map(|s| s.ports.clone()))
                 .unwrap_or_default(),
             disks: state
-                .last_known_status.read().ok()
+                .last_known_status
+                .read()
+                .ok()
                 .and_then(|lks| lks.get(&host_key).map(|s| s.disks.clone()))
                 .unwrap_or_default(),
             processes: vec![],
             temperatures: state
-                .last_known_status.read().ok()
+                .last_known_status
+                .read()
+                .ok()
                 .and_then(|lks| lks.get(&host_key).map(|s| s.temperatures.clone()))
                 .unwrap_or_default(),
             gpus: state
-                .last_known_status.read().ok()
+                .last_known_status
+                .read()
+                .ok()
                 .and_then(|lks| lks.get(&host_key).map(|s| s.gpus.clone()))
                 .unwrap_or_default(),
         };
@@ -287,8 +324,8 @@ async fn handle_down(target: &str, display_name: &str, state: &Arc<AppState>) {
             None
         } else {
             let last_recovery = record.alert_state.last_recovery_alert;
-            let cooldown_passed = last_recovery
-                .is_none_or(|t| t.elapsed() > Duration::from_secs(FLAP_COOLDOWN_SECS));
+            let cooldown_passed =
+                last_recovery.is_none_or(|t| t.elapsed() > Duration::from_secs(FLAP_COOLDOWN_SECS));
 
             if cooldown_passed {
                 record.alert_state.offline_alerted = true;
@@ -306,7 +343,11 @@ async fn handle_down(target: &str, display_name: &str, state: &Arc<AppState>) {
     if let Some(msg) = alert_msg {
         alert_service::send_alert(&state.http_client, &state.db_pool, &msg).await;
         let _ = crate::repositories::alert_history_repo::insert_alert(
-            &state.db_pool, &host_key, "host_down", &msg,
-        ).await;
+            &state.db_pool,
+            &host_key,
+            "host_down",
+            &msg,
+        )
+        .await;
     }
 }

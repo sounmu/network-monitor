@@ -112,7 +112,10 @@ pub async fn get_enabled(pool: &PgPool) -> Result<Vec<HttpMonitor>, sqlx::Error>
         .await
 }
 
-pub async fn create(pool: &PgPool, req: &CreateHttpMonitorRequest) -> Result<HttpMonitor, sqlx::Error> {
+pub async fn create(
+    pool: &PgPool,
+    req: &CreateHttpMonitorRequest,
+) -> Result<HttpMonitor, sqlx::Error> {
     sqlx::query_as::<_, HttpMonitor>(
         r#"
         INSERT INTO http_monitors (name, url, method, expected_status, interval_secs, timeout_ms, enabled)
@@ -131,7 +134,11 @@ pub async fn create(pool: &PgPool, req: &CreateHttpMonitorRequest) -> Result<Htt
     .await
 }
 
-pub async fn update(pool: &PgPool, id: i32, req: &UpdateHttpMonitorRequest) -> Result<Option<HttpMonitor>, sqlx::Error> {
+pub async fn update(
+    pool: &PgPool,
+    id: i32,
+    req: &UpdateHttpMonitorRequest,
+) -> Result<Option<HttpMonitor>, sqlx::Error> {
     sqlx::query_as::<_, HttpMonitor>(
         r#"
         UPDATE http_monitors

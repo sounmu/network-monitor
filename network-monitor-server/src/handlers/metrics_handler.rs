@@ -47,17 +47,14 @@ pub async fn get_metrics_by_host_key(
 
             // For long ranges (>6h), use the in-memory TTL cache to avoid repeated DB scans
             if duration_hours > 6 {
-                let cache_key = MetricsQueryCache::make_key(
-                    &host_key,
-                    start.timestamp(),
-                    end.timestamp(),
-                );
+                let cache_key =
+                    MetricsQueryCache::make_key(&host_key, start.timestamp(), end.timestamp());
                 if let Some(cached) = state.metrics_query_cache.get(&cache_key) {
                     cached
                 } else {
-                    let result = metrics_repo::fetch_metrics_range(
-                        &state.db_pool, &host_key, start, end,
-                    ).await?;
+                    let result =
+                        metrics_repo::fetch_metrics_range(&state.db_pool, &host_key, start, end)
+                            .await?;
                     state.metrics_query_cache.insert(cache_key, result.clone());
                     result
                 }
@@ -143,14 +140,16 @@ pub async fn public_status(
 pub async fn prometheus_metrics(
     State(state): State<Arc<AppState>>,
 ) -> Result<impl IntoResponse, AppError> {
-    let store = state.store.read().map_err(|e| {
-        AppError::Internal(format!("Failed to acquire store read lock: {}", e))
-    })?;
+    let store = state
+        .store
+        .read()
+        .map_err(|e| AppError::Internal(format!("Failed to acquire store read lock: {}", e)))?;
 
     let mut output = String::new();
 
     // HELP and TYPE declarations
-    output.push_str("# HELP netmonitor_host_online Whether the host is online (1) or offline (0).\n");
+    output
+        .push_str("# HELP netmonitor_host_online Whether the host is online (1) or offline (0).\n");
     output.push_str("# TYPE netmonitor_host_online gauge\n");
     output.push_str("# HELP netmonitor_cpu_usage_percent CPU usage percentage.\n");
     output.push_str("# TYPE netmonitor_cpu_usage_percent gauge\n");
@@ -172,7 +171,10 @@ pub async fn prometheus_metrics(
                 status.display_name.replace('"', "\\\""),
             );
             let online = if status.is_online { 1 } else { 0 };
-            output.push_str(&format!("netmonitor_host_online{{{}}} {}\n", labels, online));
+            output.push_str(&format!(
+                "netmonitor_host_online{{{}}} {}\n",
+                labels, online
+            ));
         }
     }
 
@@ -197,8 +199,10 @@ pub async fn prometheus_metrics(
     }
 
     Ok((
-        [(header::CONTENT_TYPE, "text/plain; version=0.0.4; charset=utf-8")],
+        [(
+            header::CONTENT_TYPE,
+            "text/plain; version=0.0.4; charset=utf-8",
+        )],
         output,
     ))
 }
-

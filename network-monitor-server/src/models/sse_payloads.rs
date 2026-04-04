@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 
-use crate::models::agent_metrics::{DiskInfo, DockerContainer, GpuInfo, PortStatus, ProcessInfo, TemperatureInfo};
+use crate::models::agent_metrics::{
+    DiskInfo, DockerContainer, GpuInfo, PortStatus, ProcessInfo, TemperatureInfo,
+};
 
 /// Network throughput per second — computed server-side as a delta of cumulative byte counters.
 ///
