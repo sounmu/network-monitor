@@ -10,6 +10,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use axum::http::{HeaderValue, Method};
+use axum::middleware;
+use axum::response::Response;
 use tower_http::cors::CorsLayer;
 
 use anyhow::Context;
@@ -123,6 +125,7 @@ async fn main() -> anyhow::Result<()> {
     let compression = tower_http::compression::CompressionLayer::new();
 
     let app = metrics_routes::create_router(Arc::clone(&state))
+        .layer(middleware::map_response(add_api_version_header))
         .layer(cors)
         .layer(compression);
 
@@ -149,4 +152,11 @@ async fn main() -> anyhow::Result<()> {
         .context("Server error during execution")?;
 
     Ok(())
+}
+
+async fn add_api_version_header(mut response: Response) -> Response {
+    response
+        .headers_mut()
+        .insert("X-API-Version", HeaderValue::from_static("1"));
+    response
 }
