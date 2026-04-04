@@ -23,7 +23,10 @@ const PUBLIC_PATHS = ["/login", "/setup", "/status"];
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<UserInfo | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(() => {
+    if (typeof window === "undefined") return true;
+    return !!getUserToken();
+  });
   const pathname = usePathname();
   const router = useRouter();
 
@@ -40,8 +43,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         .finally(() => {
           setIsLoading(false);
         });
-    } else {
-      setIsLoading(false);
     }
   }, []);
 

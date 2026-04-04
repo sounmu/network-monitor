@@ -113,7 +113,7 @@ export default function AgentsPage() {
     } finally {
       setSaving(false);
     }
-  }, [form, editingKey, mutate]);
+  }, [form, editingKey, mutate, t]);
 
   const handleDelete = useCallback(async (hostKey: string) => {
     try {
@@ -123,7 +123,7 @@ export default function AgentsPage() {
     } catch (e) {
       alert(e instanceof Error ? e.message : t.agents.errorDeleteFailed);
     }
-  }, [mutate]);
+  }, [mutate, t]);
 
   const updateField = <K extends keyof HostFormData>(key: K, value: HostFormData[K]) => {
     setForm((prev) => ({ ...prev, [key]: value }));

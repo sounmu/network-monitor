@@ -85,7 +85,7 @@ export default function AlertsPage() {
     } finally {
       setSaving(false);
     }
-  }, [globalForm, mutateGlobal]);
+  }, [globalForm, mutateGlobal, t]);
 
   return (
     <div className="page-content fade-in">

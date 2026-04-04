@@ -4,7 +4,6 @@ import {
   createContext,
   useCallback,
   useContext,
-  useEffect,
   useState,
 } from "react";
 import { defaultLocale, Locale, locales, translations, Translations } from "./translations";
@@ -24,15 +23,12 @@ const I18nContext = createContext<I18nContextValue>({
 });
 
 export function I18nProvider({ children }: { children: React.ReactNode }) {
-  const [locale, setLocaleState] = useState<Locale>(defaultLocale);
-
-  // Read persisted locale from localStorage on mount
-  useEffect(() => {
+  const [locale, setLocaleState] = useState<Locale>(() => {
+    if (typeof window === "undefined") return defaultLocale;
     const saved = localStorage.getItem(STORAGE_KEY) as Locale | null;
-    if (saved && locales.includes(saved)) {
-      setLocaleState(saved);
-    }
-  }, []);
+    if (saved && locales.includes(saved)) return saved;
+    return defaultLocale;
+  });
 
   const setLocale = useCallback((next: Locale) => {
     localStorage.setItem(STORAGE_KEY, next);

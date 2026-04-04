@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { usePathname } from "next/navigation";
 import { Menu, X } from "lucide-react";
 import Sidebar from "./Sidebar";
@@ -11,10 +11,12 @@ export default function SidebarShell() {
   const pathname = usePathname();
   const { t } = useI18n();
 
-  // Auto-close sidebar on route change (mobile)
-  useEffect(() => {
+  // Auto-close sidebar on route change (mobile) — adjust state during render
+  const [prevPathname, setPrevPathname] = useState(pathname);
+  if (prevPathname !== pathname) {
+    setPrevPathname(pathname);
     setIsOpen(false);
-  }, [pathname]);
+  }
 
   return (
     <>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useCallback } from "react";
 import useSWR from "swr";
 import { Settings2, Plus, X, Grip } from "lucide-react";
 import { useSSE } from "@/app/lib/sse-context";
@@ -29,13 +29,11 @@ export default function DashboardWidgets() {
   const [editing, setEditing] = useState(false);
   const [initialized, setInitialized] = useState(false);
 
-  // Sync from server on first load
-  useEffect(() => {
-    if (savedWidgets && !initialized) {
-      setWidgets(savedWidgets);
-      setInitialized(true);
-    }
-  }, [savedWidgets, initialized]);
+  // Sync from server on first load — adjust state during render (React recommended pattern)
+  if (savedWidgets && !initialized) {
+    setWidgets(savedWidgets);
+    setInitialized(true);
+  }
 
   const handleSave = useCallback(async () => {
     setEditing(false);
