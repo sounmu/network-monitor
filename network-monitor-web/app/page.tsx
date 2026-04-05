@@ -52,7 +52,7 @@ export default function HomePage() {
               letterSpacing: "-0.3px",
             }}
           >
-            Infrastructure Overview
+            {t.overview.title}
           </h1>
         </div>
         <p style={{ color: "var(--text-muted)", fontSize: 13 }}>
@@ -149,7 +149,7 @@ export default function HomePage() {
               borderRadius: 6,
             }}
           >
-            {hosts.length} servers
+            {hosts.length} {t.common.servers}
           </span>
         </div>
 

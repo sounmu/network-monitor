@@ -132,7 +132,7 @@ export default function HostPage({ params }: Props) {
               padding: 0,
             }}
           >
-            <ArrowLeft size={12} /> Overview
+            <ArrowLeft size={12} /> {t.host.backToOverview}
           </button>
           <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
             <h1

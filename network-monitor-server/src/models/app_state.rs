@@ -29,6 +29,8 @@ pub struct AppState {
     pub last_known_status: Arc<RwLock<HashMap<String, HostStatusPayload>>>,
     /// TTL cache for long-range metric queries (avoids repeated DB scans for same range)
     pub metrics_query_cache: Arc<MetricsQueryCache>,
+    /// Per-IP login attempt rate limiter
+    pub login_rate_limiter: Arc<LoginRateLimiter>,
 }
 
 impl AppState {
@@ -262,5 +264,56 @@ impl MetricsQueryCache {
         if let Ok(mut entries) = self.entries.write() {
             entries.retain(|_, entry| entry.inserted_at.elapsed() < self.ttl);
         }
+    }
+}
+
+// ──────────────────────────────────────────────
+// Login rate limiter (per-IP sliding window)
+// ──────────────────────────────────────────────
+
+/// Simple per-IP rate limiter for login attempts.
+/// Allows `max_attempts` within `window` duration per IP address.
+pub struct LoginRateLimiter {
+    attempts: RwLock<HashMap<String, VecDeque<Instant>>>,
+    max_attempts: usize,
+    window: Duration,
+}
+
+impl LoginRateLimiter {
+    pub fn new(max_attempts: usize, window: Duration) -> Self {
+        Self {
+            attempts: RwLock::new(HashMap::new()),
+            max_attempts,
+            window,
+        }
+    }
+
+    /// Check if a login attempt from the given IP is allowed.
+    /// Returns Ok(()) if allowed, Err with remaining seconds if rate-limited.
+    pub fn check(&self, ip: &str) -> Result<(), u64> {
+        let mut map = match self.attempts.write() {
+            Ok(m) => m,
+            Err(_) => return Ok(()), // On lock poisoning, allow the attempt
+        };
+        let now = Instant::now();
+        let entry = map.entry(ip.to_string()).or_insert_with(VecDeque::new);
+
+        // Remove expired attempts
+        while let Some(front) = entry.front() {
+            if now.duration_since(*front) > self.window {
+                entry.pop_front();
+            } else {
+                break;
+            }
+        }
+
+        if entry.len() >= self.max_attempts {
+            let oldest = entry.front().unwrap();
+            let retry_after = self.window.as_secs() - now.duration_since(*oldest).as_secs();
+            return Err(retry_after.max(1));
+        }
+
+        entry.push_back(now);
+        Ok(())
     }
 }

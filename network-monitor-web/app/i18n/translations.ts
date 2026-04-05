@@ -19,6 +19,7 @@ export const translations = {
       passwordTooShort: "Password must be at least 6 characters",
       passwordMismatch: "Passwords do not match",
       usernameRequired: "Username is required",
+      setupFailed: "Setup failed",
     },
     // Dashboard
     dashboard: {
@@ -35,6 +36,9 @@ export const translations = {
         http_monitor: "HTTP Monitor",
       },
       selectHost: "Select Host",
+      cpu: "CPU",
+      ram: "RAM",
+      noRecentAlerts: "No recent alerts",
       noWidgets: "No widgets added. Click 'Customize' to add widgets.",
     },
     // Overview page
@@ -57,6 +61,7 @@ export const translations = {
       lastSeen: "Last seen:",
       noMetrics: "No metrics received yet",
       noMetricsHint: "Data will appear once the agent sends metrics.",
+      backToOverview: "Overview",
       loadAverage: "System Load Average",
       portStatus: "Port Status",
       dockerContainers: "Docker Containers",
@@ -96,6 +101,8 @@ export const translations = {
       errorSaveFailed: "Failed to save.",
       errorDeleteFailed: "Failed to delete.",
       deleteConfirmText: "Confirm",
+      hostKey: "Host Key (agent URL)",
+      agentCount: "agents",
     },
     // Alerts page
     alerts: {
@@ -123,9 +130,25 @@ export const translations = {
       sustained: "Sustained (s)",
       cooldown: "Cooldown (s)",
       enabled: "Enabled",
+      override: "OVERRIDE",
     },
     // Sidebar
     sidebar: {
+      appName: "NetMonitor",
+      subtitle: "Infrastructure",
+      total: "Total",
+      online: "Online",
+      pending: "Pending",
+      offline: "Offline",
+      overview: "Overview",
+      agents: "Agents",
+      alerts: "Alerts",
+      monitors: "Monitors",
+      status: "Status",
+      servers: "Servers",
+      active: "Active",
+      pendingStatus: "Pending",
+      offlineStatus: "Offline",
       waitingForAgents: "Waiting for agents...",
       live: "Live",
       connecting: "Connecting...",
@@ -135,6 +158,8 @@ export const translations = {
     // PortList
     portList: {
       noData: "No port data",
+      open: "OPEN",
+      closed: "CLOSED",
     },
     // DockerGrid
     dockerGrid: {
@@ -246,11 +271,19 @@ export const translations = {
       memory: "VRAM",
       power: "Power",
     },
+    // ErrorBoundary
+    errorBoundary: {
+      title: "Something went wrong",
+      reload: "Reload",
+    },
     // Common
     common: {
       delete: "Delete",
       cancel: "Cancel",
       confirm: "Confirm",
+      online: "ONLINE",
+      offline: "OFFLINE",
+      servers: "servers",
     },
   },
   ko: {
@@ -268,6 +301,9 @@ export const translations = {
         http_monitor: "HTTP 모니터",
       },
       selectHost: "호스트 선택",
+      cpu: "CPU",
+      ram: "RAM",
+      noRecentAlerts: "최근 알림 없음",
       noWidgets: "추가된 위젯이 없습니다. '커스터마이즈'를 클릭하여 위젯을 추가하세요.",
     },
     auth: {
@@ -284,6 +320,7 @@ export const translations = {
       passwordTooShort: "비밀번호는 최소 6자 이상이어야 합니다",
       passwordMismatch: "비밀번호가 일치하지 않습니다",
       usernameRequired: "사용자 이름은 필수입니다",
+      setupFailed: "초기 설정에 실패했습니다",
     },
     overview: {
       title: "인프라 개요",
@@ -303,6 +340,7 @@ export const translations = {
       lastSeen: "마지막 수신:",
       noMetrics: "아직 수신된 메트릭이 없습니다",
       noMetricsHint: "에이전트가 데이터를 전송하면 자동으로 표시됩니다.",
+      backToOverview: "대시보드",
       loadAverage: "시스템 Load Average",
       portStatus: "포트 상태",
       dockerContainers: "Docker 컨테이너",
@@ -341,6 +379,8 @@ export const translations = {
       errorSaveFailed: "저장에 실패했습니다.",
       errorDeleteFailed: "삭제에 실패했습니다.",
       deleteConfirmText: "확인",
+      hostKey: "Host Key (에이전트 URL)",
+      agentCount: "개",
     },
     alerts: {
       title: "알람 설정",
@@ -368,8 +408,24 @@ export const translations = {
       sustained: "지속 시간 (초)",
       cooldown: "쿨다운 (초)",
       enabled: "활성화",
+      override: "오버라이드",
     },
     sidebar: {
+      appName: "NetMonitor",
+      subtitle: "인프라 모니터링",
+      total: "전체",
+      online: "온라인",
+      pending: "대기",
+      offline: "오프라인",
+      overview: "대시보드",
+      agents: "에이전트",
+      alerts: "알림",
+      monitors: "모니터",
+      status: "상태",
+      servers: "서버",
+      active: "활성",
+      pendingStatus: "대기 중",
+      offlineStatus: "오프라인",
       waitingForAgents: "에이전트 연결 대기 중...",
       live: "실시간 연결됨",
       connecting: "연결 중...",
@@ -378,6 +434,8 @@ export const translations = {
     },
     portList: {
       noData: "포트 데이터 없음",
+      open: "열림",
+      closed: "닫힘",
     },
     dockerGrid: {
       noContainers: "실행 중인 컨테이너 없음",
@@ -481,10 +539,17 @@ export const translations = {
       memory: "VRAM",
       power: "전력",
     },
+    errorBoundary: {
+      title: "오류가 발생했습니다",
+      reload: "새로고침",
+    },
     common: {
       delete: "삭제",
       cancel: "취소",
       confirm: "확인",
+      online: "온라인",
+      offline: "오프라인",
+      servers: "서버",
     },
   },
 } satisfies Record<Locale, unknown>;

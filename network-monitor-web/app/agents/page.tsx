@@ -137,7 +137,7 @@ export default function AgentsPage() {
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <Settings size={20} color="var(--accent-blue)" />
             <h1 style={{ fontSize: 22, fontWeight: 800, color: "var(--text-primary)", letterSpacing: "-0.3px" }}>
-              Agent Management
+              {t.agents.title}
             </h1>
           </div>
           {editingKey === null && (
@@ -164,7 +164,7 @@ export default function AgentsPage() {
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 16 }}>
-            <FormField label="Host Key (agent URL)" required>
+            <FormField label={t.agents.hostKey} required>
               {editingKey === "new" ? (
                 <input className="date-input" style={{ width: "100%", fontFamily: "var(--font-mono), monospace" }}
                   placeholder="192.168.1.10:9101" value={form.host_key}
@@ -185,7 +185,7 @@ export default function AgentsPage() {
                 value={form.scrape_interval_secs}
                 onChange={(e) => updateField("scrape_interval_secs", parseInt(e.target.value) || 10)} />
             </FormField>
-            <FormField label="Load Threshold">
+            <FormField label={t.agents.loadThreshold}>
               <input className="date-input" style={{ width: "100%" }} type="number" step="0.1"
                 value={form.load_threshold}
                 onChange={(e) => updateField("load_threshold", parseFloat(e.target.value) || 4.0)} />
@@ -224,7 +224,7 @@ export default function AgentsPage() {
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
           <h2 style={{ fontSize: 15, fontWeight: 700, color: "var(--text-primary)" }}>{t.agents.registeredAgents}</h2>
           <span style={{ fontSize: 11, color: "var(--text-muted)", background: "var(--bg-card-hover)", padding: "2px 8px", borderRadius: 6 }}>
-            {hosts?.length ?? 0} agents
+            {hosts?.length ?? 0} {t.agents.agentCount}
           </span>
         </div>
 
@@ -263,7 +263,7 @@ export default function AgentsPage() {
                 </div>
               </div>
               <span style={{ padding: "3px 10px", borderRadius: 6, fontSize: 11, fontWeight: 600, background: host.is_online ? "var(--status-online-bg)" : "var(--status-offline-bg)", color: host.is_online ? "var(--badge-online-text)" : "var(--badge-offline-text)", border: `1px solid ${host.is_online ? "var(--badge-online-border)" : "var(--badge-offline-border)"}` }}>
-                {host.is_online ? "ONLINE" : "OFFLINE"}
+                {host.is_online ? t.common.online : t.common.offline}
               </span>
 
               <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>

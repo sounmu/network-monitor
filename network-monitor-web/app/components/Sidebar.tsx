@@ -71,9 +71,9 @@ export default function Sidebar() {
           </div>
           <div>
             <div style={{ fontWeight: 700, fontSize: 14, color: "var(--text-primary)" }}>
-              NetMonitor
+              {t.sidebar.appName}
             </div>
-            <div style={{ fontSize: 11, color: "var(--text-muted)" }}>Infrastructure</div>
+            <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{t.sidebar.subtitle}</div>
           </div>
         </div>
       </div>
@@ -81,15 +81,15 @@ export default function Sidebar() {
       {/* Summary stats */}
       <div style={{ padding: "14px 16px", borderBottom: "1px solid var(--border-subtle)" }}>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: "6px" }}>
-          <StatMini label="Total" value={String(hosts.length)} color="var(--accent-blue)" />
-          <StatMini label="Online" value={String(onlineCount)} color="var(--accent-green)" />
+          <StatMini label={t.sidebar.total} value={String(hosts.length)} color="var(--accent-blue)" />
+          <StatMini label={t.sidebar.online} value={String(onlineCount)} color="var(--accent-green)" />
           <StatMini
-            label="Pending"
+            label={t.sidebar.pending}
             value={String(pendingCount)}
             color={pendingCount > 0 ? "var(--accent-yellow)" : "var(--text-muted)"}
           />
           <StatMini
-            label="Offline"
+            label={t.sidebar.offline}
             value={String(offlineCount)}
             color={offlineCount > 0 ? "var(--accent-red)" : "var(--text-muted)"}
           />
@@ -99,31 +99,31 @@ export default function Sidebar() {
       {/* Navigation */}
       <nav aria-label="Main navigation" style={{ padding: "10px 10px 0" }}>
         <SidebarItem
-          label="Overview"
+          label={t.sidebar.overview}
           icon={<LayoutDashboard size={15} />}
           onClick={() => router.push("/")}
           active={pathname === "/"}
         />
         <SidebarItem
-          label="Agents"
+          label={t.sidebar.agents}
           icon={<Settings size={15} />}
           onClick={() => router.push("/agents")}
           active={pathname === "/agents"}
         />
         <SidebarItem
-          label="Alerts"
+          label={t.sidebar.alerts}
           icon={<Bell size={15} />}
           onClick={() => router.push("/alerts")}
           active={pathname === "/alerts"}
         />
         <SidebarItem
-          label="Monitors"
+          label={t.sidebar.monitors}
           icon={<Globe size={15} />}
           onClick={() => router.push("/monitors")}
           active={pathname === "/monitors"}
         />
         <SidebarItem
-          label="Status"
+          label={t.sidebar.status}
           icon={<Shield size={15} />}
           onClick={() => router.push("/status")}
           active={pathname === "/status"}
@@ -150,7 +150,7 @@ export default function Sidebar() {
               letterSpacing: "0.8px",
             }}
           >
-            Servers
+            {t.sidebar.servers}
           </span>
         </div>
 
@@ -233,7 +233,7 @@ export default function Sidebar() {
                   <div style={{ fontSize: 11, color: "var(--text-muted)", fontFamily: "var(--font-mono), monospace", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                     {host.display_name !== host.host_key
                       ? host.host_key
-                      : status === "online" ? "Active" : status === "pending" ? "Pending" : "Offline"}
+                      : status === "online" ? t.sidebar.active : status === "pending" ? t.sidebar.pendingStatus : t.sidebar.offlineStatus}
                   </div>
                 </div>
                 <span className={STATUS_DOT_CLASS[status]} style={{ flexShrink: 0 }} />

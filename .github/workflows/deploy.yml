@@ -106,7 +106,7 @@ jobs:
         run: |
           ssh -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} << 'EOF'
             for i in $(seq 1 30); do
-              if curl -sf http://localhost:3000/ > /dev/null 2>&1; then
+              if curl -sf http://localhost:3000/api/health > /dev/null 2>&1; then
                 echo "✅ Health check passed (attempt $i)"
                 exit 0
               fi

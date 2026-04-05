@@ -94,7 +94,7 @@ export default function AlertsPage() {
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
           <Bell size={20} color="var(--accent-blue)" />
           <h1 style={{ fontSize: 22, fontWeight: 800, color: "var(--text-primary)", letterSpacing: "-0.3px" }}>
-            Alert Configuration
+            {t.alerts.title}
           </h1>
         </div>
         <p style={{ color: "var(--text-muted)", fontSize: 13 }}>
@@ -221,7 +221,7 @@ function HostAlertOverride({ host, globalConfigs }: { host: HostSummary; globalC
           <div style={{ fontSize: 11, color: "var(--text-muted)", fontFamily: "var(--font-mono), monospace" }}>{host.host_key}</div>
         </div>
         {hasOverride && (
-          <span style={{ padding: "2px 8px", borderRadius: 6, background: "var(--preset-hover-bg)", color: "var(--accent-blue)", fontSize: 10, fontWeight: 600 }}>OVERRIDE</span>
+          <span style={{ padding: "2px 8px", borderRadius: 6, background: "var(--preset-hover-bg)", color: "var(--accent-blue)", fontSize: 10, fontWeight: 600 }}>{t.alerts.override}</span>
         )}
         {expanded ? <ChevronUp size={16} color="var(--text-muted)" /> : <ChevronDown size={16} color="var(--text-muted)" />}
       </button>

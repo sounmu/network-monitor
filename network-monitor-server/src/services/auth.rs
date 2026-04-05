@@ -90,6 +90,40 @@ where
     }
 }
 
+/// Axum extractor that enforces admin-only access.
+/// Only user JWTs with role == "admin" are accepted. Agent JWTs are rejected.
+pub struct AdminGuard;
+
+impl<S> FromRequestParts<S> for AdminGuard
+where
+    S: Send + Sync,
+{
+    type Rejection = AppError;
+
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        let auth_header = parts
+            .headers
+            .get("Authorization")
+            .and_then(|v| v.to_str().ok())
+            .ok_or_else(|| AppError::Unauthorized("Missing Authorization header".to_string()))?;
+
+        let token = auth_header.strip_prefix("Bearer ").ok_or_else(|| {
+            AppError::Unauthorized("Authorization header must use Bearer scheme".to_string())
+        })?;
+
+        let claims = super::user_auth::decode_user_jwt(token)
+            .ok_or_else(|| AppError::Unauthorized("Invalid or expired token".to_string()))?;
+
+        if claims.role != "admin" {
+            return Err(AppError::Unauthorized(
+                "Admin access required".to_string(),
+            ));
+        }
+
+        Ok(AdminGuard)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

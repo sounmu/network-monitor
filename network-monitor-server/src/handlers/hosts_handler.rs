@@ -6,7 +6,7 @@ use axum::extract::{Path, State};
 use crate::errors::AppError;
 use crate::models::app_state::AppState;
 use crate::repositories::hosts_repo::{self, CreateHostRequest, HostRow, UpdateHostRequest};
-use crate::services::auth::AuthGuard;
+use crate::services::auth::{AdminGuard, AuthGuard};
 
 // ── Validation limits ────────────────────────
 const MAX_KEY_LEN: usize = 255;
@@ -33,9 +33,9 @@ pub async fn list_hosts(
     Ok(Json(hosts))
 }
 
-/// POST /api/hosts — register a new host
+/// POST /api/hosts — register a new host (admin only)
 pub async fn create_host(
-    _auth: AuthGuard,
+    _admin: AdminGuard,
     State(state): State<Arc<AppState>>,
     Json(body): Json<CreateHostRequest>,
 ) -> Result<Json<HostRow>, AppError> {
@@ -87,9 +87,9 @@ pub async fn get_host(
     Ok(Json(host))
 }
 
-/// PUT /api/hosts/{host_key} — update host config
+/// PUT /api/hosts/{host_key} — update host config (admin only)
 pub async fn update_host(
-    _auth: AuthGuard,
+    _admin: AdminGuard,
     State(state): State<Arc<AppState>>,
     Path(host_key): Path<String>,
     Json(body): Json<UpdateHostRequest>,
@@ -114,9 +114,9 @@ pub async fn update_host(
     Ok(Json(host))
 }
 
-/// DELETE /api/hosts/{host_key} — delete a host
+/// DELETE /api/hosts/{host_key} — delete a host (admin only)
 pub async fn delete_host(
-    _auth: AuthGuard,
+    _admin: AdminGuard,
     State(state): State<Arc<AppState>>,
     Path(host_key): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {

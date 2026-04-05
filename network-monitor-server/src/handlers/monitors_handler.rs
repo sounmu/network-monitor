@@ -7,7 +7,7 @@ use serde::Deserialize;
 use crate::errors::AppError;
 use crate::models::app_state::AppState;
 use crate::repositories::{http_monitors_repo, ping_monitors_repo};
-use crate::services::auth::AuthGuard;
+use crate::services::auth::{AdminGuard, AuthGuard};
 
 // ──────────────────────────────────────────────
 // HTTP Monitors
@@ -22,9 +22,9 @@ pub async fn list_http_monitors(
     Ok(Json(monitors))
 }
 
-/// POST /api/http-monitors
+/// POST /api/http-monitors (admin only)
 pub async fn create_http_monitor(
-    _auth: AuthGuard,
+    _admin: AdminGuard,
     State(state): State<Arc<AppState>>,
     Json(body): Json<http_monitors_repo::CreateHttpMonitorRequest>,
 ) -> Result<Json<http_monitors_repo::HttpMonitor>, AppError> {
@@ -34,9 +34,9 @@ pub async fn create_http_monitor(
     Ok(Json(monitor))
 }
 
-/// PUT /api/http-monitors/{id}
+/// PUT /api/http-monitors/{id} (admin only)
 pub async fn update_http_monitor(
-    _auth: AuthGuard,
+    _admin: AdminGuard,
     State(state): State<Arc<AppState>>,
     Path(id): Path<i32>,
     Json(body): Json<http_monitors_repo::UpdateHttpMonitorRequest>,
@@ -53,9 +53,9 @@ pub async fn update_http_monitor(
     Ok(Json(monitor))
 }
 
-/// DELETE /api/http-monitors/{id}
+/// DELETE /api/http-monitors/{id} (admin only)
 pub async fn delete_http_monitor(
-    _auth: AuthGuard,
+    _admin: AdminGuard,
     State(state): State<Arc<AppState>>,
     Path(id): Path<i32>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -105,9 +105,9 @@ pub async fn list_ping_monitors(
     Ok(Json(monitors))
 }
 
-/// POST /api/ping-monitors
+/// POST /api/ping-monitors (admin only)
 pub async fn create_ping_monitor(
-    _auth: AuthGuard,
+    _admin: AdminGuard,
     State(state): State<Arc<AppState>>,
     Json(body): Json<ping_monitors_repo::CreatePingMonitorRequest>,
 ) -> Result<Json<ping_monitors_repo::PingMonitor>, AppError> {
@@ -117,9 +117,9 @@ pub async fn create_ping_monitor(
     Ok(Json(monitor))
 }
 
-/// PUT /api/ping-monitors/{id}
+/// PUT /api/ping-monitors/{id} (admin only)
 pub async fn update_ping_monitor(
-    _auth: AuthGuard,
+    _admin: AdminGuard,
     State(state): State<Arc<AppState>>,
     Path(id): Path<i32>,
     Json(body): Json<ping_monitors_repo::UpdatePingMonitorRequest>,
@@ -135,9 +135,9 @@ pub async fn update_ping_monitor(
     Ok(Json(monitor))
 }
 
-/// DELETE /api/ping-monitors/{id}
+/// DELETE /api/ping-monitors/{id} (admin only)
 pub async fn delete_ping_monitor(
-    _auth: AuthGuard,
+    _admin: AdminGuard,
     State(state): State<Arc<AppState>>,
     Path(id): Path<i32>,
 ) -> Result<Json<serde_json::Value>, AppError> {

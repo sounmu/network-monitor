@@ -92,7 +92,7 @@ export default function PortList({ ports }: PortListProps) {
                 color: p.is_open ? "var(--badge-online-text)" : "var(--badge-offline-text)",
               }}
             >
-              {p.is_open ? "OPEN" : "CLOSED"}
+              {p.is_open ? t.portList.open : t.portList.closed}
             </span>
           </div>
         );

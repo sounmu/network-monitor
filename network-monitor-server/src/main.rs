@@ -15,7 +15,7 @@ use axum::response::Response;
 use tower_http::cors::CorsLayer;
 
 use anyhow::Context;
-use models::app_state::{AppState, MetricsStore};
+use models::app_state::{AppState, LoginRateLimiter, MetricsStore};
 use routes::metrics_routes;
 use sqlx::postgres::PgPoolOptions;
 use tokio::net::TcpListener;
@@ -83,6 +83,10 @@ async fn main() -> anyhow::Result<()> {
         sse_tx,
         last_known_status: Arc::new(RwLock::new(HashMap::new())),
         metrics_query_cache: metrics_query_cache.clone(),
+        login_rate_limiter: Arc::new(LoginRateLimiter::new(
+            10,
+            std::time::Duration::from_secs(300),
+        )),
     });
 
     // Background task: evict expired cache entries every 60 seconds

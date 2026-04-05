@@ -62,7 +62,7 @@ export default function SetupPage() {
       auth.login(response.token, response.user);
       router.replace("/");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Setup failed");
+      setError(err instanceof Error ? err.message : t.auth.setupFailed);
     } finally {
       setLoading(false);
     }

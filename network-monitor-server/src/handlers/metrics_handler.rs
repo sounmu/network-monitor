@@ -17,6 +17,21 @@ pub async fn root_handler() -> &'static str {
     "Monitoring Hub is running! (Pull mode)"
 }
 
+/// GET /api/health — deep health check (verifies DB connectivity)
+pub async fn health_check(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    sqlx::query("SELECT 1")
+        .execute(&state.db_pool)
+        .await
+        .map_err(|e| AppError::Internal(format!("Database health check failed: {e}")))?;
+
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "version": env!("CARGO_PKG_VERSION"),
+    })))
+}
+
 /// Time range query parameters
 #[derive(Deserialize)]
 pub struct TimeRangeQuery {

@@ -6,7 +6,7 @@ use axum::extract::{Path, State};
 use crate::errors::AppError;
 use crate::models::app_state::AppState;
 use crate::repositories::alert_configs_repo::{self, AlertConfigRow, UpsertAlertRequest};
-use crate::services::auth::AuthGuard;
+use crate::services::auth::{AdminGuard, AuthGuard};
 
 /// GET /api/alert-configs — get global default alert configs
 pub async fn get_global_configs(
@@ -19,7 +19,7 @@ pub async fn get_global_configs(
 
 /// PUT /api/alert-configs — update global default alert configs
 pub async fn update_global_configs(
-    _auth: AuthGuard,
+    _admin: AdminGuard,
     State(state): State<Arc<AppState>>,
     Json(body): Json<Vec<UpsertAlertRequest>>,
 ) -> Result<Json<Vec<AlertConfigRow>>, AppError> {
@@ -45,7 +45,7 @@ pub async fn get_host_configs(
 
 /// PUT /api/alert-configs/{host_key} — upsert per-host alert config overrides
 pub async fn update_host_configs(
-    _auth: AuthGuard,
+    _admin: AdminGuard,
     State(state): State<Arc<AppState>>,
     Path(host_key): Path<String>,
     Json(body): Json<Vec<UpsertAlertRequest>>,
@@ -63,7 +63,7 @@ pub async fn update_host_configs(
 
 /// DELETE /api/alert-configs/{host_key} — delete per-host overrides (reverts to global)
 pub async fn delete_host_configs(
-    _auth: AuthGuard,
+    _admin: AdminGuard,
     State(state): State<Arc<AppState>>,
     Path(host_key): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {

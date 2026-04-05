@@ -217,8 +217,8 @@ function WidgetContent({
           <span style={{ fontSize: 13, fontWeight: 600, color: "var(--text-primary)" }}>{name}</span>
         </div>
         <div style={{ display: "flex", gap: 16 }}>
-          <MiniGauge label="CPU" value={cpu} />
-          <MiniGauge label="RAM" value={mem} />
+          <MiniGauge label={t.dashboard.cpu} value={cpu} />
+          <MiniGauge label={t.dashboard.ram} value={mem} />
         </div>
       </div>
     );
@@ -238,7 +238,7 @@ function WidgetContent({
           {t.dashboard.widgetTypes.alert_feed}
         </div>
         {recentAlerts.length === 0 && (
-          <div style={{ fontSize: 11, color: "var(--text-muted)" }}>No recent alerts</div>
+          <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{t.dashboard.noRecentAlerts}</div>
         )}
         {recentAlerts.map((a) => (
           <div key={a.id} style={{ fontSize: 11, color: "var(--text-secondary)", marginBottom: 4, lineHeight: 1.4 }}>

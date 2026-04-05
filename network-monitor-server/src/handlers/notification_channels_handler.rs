@@ -8,7 +8,7 @@ use crate::models::app_state::AppState;
 use crate::repositories::notification_channels_repo::{
     self, CreateChannelRequest, NotificationChannelRow, UpdateChannelRequest,
 };
-use crate::services::auth::AuthGuard;
+use crate::services::auth::{AdminGuard, AuthGuard};
 
 /// GET /api/notification-channels — list all notification channels
 pub async fn list_channels(
@@ -21,7 +21,7 @@ pub async fn list_channels(
 
 /// POST /api/notification-channels — create a new notification channel
 pub async fn create_channel(
-    _auth: AuthGuard,
+    _admin: AdminGuard,
     State(state): State<Arc<AppState>>,
     Json(body): Json<CreateChannelRequest>,
 ) -> Result<Json<NotificationChannelRow>, AppError> {
@@ -33,7 +33,7 @@ pub async fn create_channel(
 
 /// PUT /api/notification-channels/{id} — update a notification channel
 pub async fn update_channel(
-    _auth: AuthGuard,
+    _admin: AdminGuard,
     State(state): State<Arc<AppState>>,
     Path(id): Path<i32>,
     Json(body): Json<UpdateChannelRequest>,
@@ -54,7 +54,7 @@ pub async fn update_channel(
 
 /// DELETE /api/notification-channels/{id} — delete a notification channel
 pub async fn delete_channel(
-    _auth: AuthGuard,
+    _admin: AdminGuard,
     State(state): State<Arc<AppState>>,
     Path(id): Path<i32>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -71,7 +71,7 @@ pub async fn delete_channel(
 
 /// POST /api/notification-channels/{id}/test — send a test message
 pub async fn test_channel(
-    _auth: AuthGuard,
+    _admin: AdminGuard,
     State(state): State<Arc<AppState>>,
     Path(id): Path<i32>,
 ) -> Result<Json<serde_json::Value>, AppError> {

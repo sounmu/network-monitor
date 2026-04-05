@@ -25,6 +25,9 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/api/auth/setup", post(auth_handler::setup))
         .route("/api/auth/status", get(auth_handler::auth_status))
         .route("/api/auth/me", get(auth_handler::me))
+        .route("/api/auth/password", axum::routing::put(auth_handler::change_password))
+        // Health check (no auth — for load balancers and deploy verification)
+        .route("/api/health", get(metrics_handler::health_check))
         // Dashboard layout
         .route(
             "/api/dashboard",
