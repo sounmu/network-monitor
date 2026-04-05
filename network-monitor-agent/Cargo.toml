@@ -1,7 +1,10 @@
 [package]
 name = "network-monitor-agent"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2024"
+description = "Lightweight monitoring agent — collects CPU, memory, disk, GPU, Docker, and port metrics"
+license = "Apache-2.0"
+repository = "https://github.com/sounmu/network-monitor"
 
 [features]
 default = []

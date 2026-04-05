@@ -1,7 +1,10 @@
 [package]
 name = "network-monitor-server"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2024"
+description = "Pull-based server monitoring backend — metrics aggregation, alerts, and REST API"
+license = "Apache-2.0"
+repository = "https://github.com/sounmu/network-monitor"
 
 [dependencies]
 axum = { version = "0.8", features = ["macros"] }

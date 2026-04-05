@@ -24,6 +24,9 @@ target_linux/
 logs/
 *.log
 
+# Database volume
+pgdata/
+
 # Node / Next.js
 node_modules/
 .next/

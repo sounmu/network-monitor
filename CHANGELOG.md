@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.0.0] — 2026-04-05
 
 ### Added
 - AdminGuard extractor — mutation endpoints require admin role
@@ -35,6 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Replaced .expect() panics in auth.rs/user_auth.rs with proper AppError returns
 - Frontend auto-redirects to /login on 401 (expired token)
 - Input validation added for alert configs, monitors, and notification channels
+- Uptime calculation always showing 100% — offline periods now write is_online=false metric records
 
 ### Security
 - 90-day retention policies for alert_history, http_monitor_results, ping_results (TimescaleDB hypertables)

@@ -2,7 +2,7 @@
 
 > Real-time server infrastructure monitoring — lightweight, self-hosted, and zero-trust.
 
-![License](https://img.shields.io/badge/license-MIT-blue.svg)
+![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
 ![Next.js](https://img.shields.io/badge/next.js-16-black.svg)
 
@@ -271,4 +271,4 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md) for development setup, coding conventio
 
 ## License
 
-[MIT](./LICENSE) © 2026 sounmu
+[Apache License 2.0](./LICENSE) © 2026 sounmu
