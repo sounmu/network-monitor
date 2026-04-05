@@ -314,6 +314,14 @@ async fn handle_down(target: &str, display_name: &str, state: &Arc<AppState>) {
     let now = Instant::now();
     let host_key = target.to_string();
 
+    // Record an offline metric so uptime calculation reflects downtime
+    let dn = display_name.to_string();
+    if let Err(e) =
+        crate::repositories::metrics_repo::insert_offline_metric(&state.db_pool, target, &dn).await
+    {
+        tracing::error!(target = %target, err = ?e, "⚠️ [Scraper] Failed to record offline metric");
+    }
+
     let alert_msg = {
         let mut store = match state.store.write() {
             Ok(s) => s,

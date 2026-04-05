@@ -344,6 +344,32 @@ pub async fn insert_metrics(
     Ok(row.0)
 }
 
+/// Insert a minimal offline metric record so the uptime calculation reflects downtime.
+/// Called by the scraper when an agent is unreachable — ensures `is_online=false` rows exist.
+pub async fn insert_offline_metric(
+    pool: &PgPool,
+    host_key: &str,
+    display_name: &str,
+) -> Result<i64, sqlx::Error> {
+    let row: (i64,) = sqlx::query_as(
+        r#"
+        INSERT INTO metrics (
+            host_key, display_name, is_online,
+            cpu_usage_percent, memory_usage_percent,
+            load_1min, load_5min, load_15min
+        )
+        VALUES ($1, $2, false, 0, 0, 0, 0, 0)
+        RETURNING id
+        "#,
+    )
+    .bind(host_key)
+    .bind(display_name)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(row.0)
+}
+
 // ──────────────────────────────────────────────
 // Select (GET /api/metrics/:host_key)
 // ──────────────────────────────────────────────
