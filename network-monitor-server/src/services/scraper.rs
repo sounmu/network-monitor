@@ -31,7 +31,7 @@ struct HostBackoff {
 
 /// Starts the pull-model scraper as a background task.
 /// Reads target list from the `hosts` DB table and alert rules from `alert_configs` each cycle.
-pub fn start_scraper(state: Arc<AppState>) {
+pub fn start_scraper(state: Arc<AppState>) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let client = match Client::builder()
             .timeout(Duration::from_secs(SCRAPE_TIMEOUT_SECS))
@@ -56,7 +56,7 @@ pub fn start_scraper(state: Arc<AppState>) {
             interval.tick().await;
             scrape_all(&client, &state, &mut backoff_map).await;
         }
-    });
+    })
 }
 
 async fn scrape_all(

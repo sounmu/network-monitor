@@ -769,7 +769,7 @@ async fn main() -> anyhow::Result<()> {
     // Spawn the Docker Events API listener as a background task.
     // Incrementally updates the cache only when container start/stop/die/pause/unpause/create/destroy
     // events fire — far cheaper than periodic polling.
-    tokio::spawn(docker_event_listener(docker_cache.clone()));
+    let docker_handle = tokio::spawn(docker_event_listener(docker_cache.clone()));
 
     let app = Router::new()
         .route(
@@ -793,10 +793,36 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("Scrape endpoint: GET http://{}/metrics", addr);
 
     axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
         .await
         .context("Agent server encountered a fatal error")?;
 
+    tracing::info!("🛑 Shutting down agent...");
+    docker_handle.abort();
+    tracing::info!("✅ Agent shutdown complete.");
+
     Ok(())
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = tokio::signal::ctrl_c();
+
+    #[cfg(unix)]
+    {
+        let mut sigterm =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .expect("failed to install SIGTERM handler");
+        tokio::select! {
+            _ = ctrl_c => tracing::info!("🛑 Received Ctrl+C"),
+            _ = sigterm.recv() => tracing::info!("🛑 Received SIGTERM"),
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        ctrl_c.await.ok();
+        tracing::info!("🛑 Received Ctrl+C");
+    }
 }
 
 // ──────────────────────────────────────────────

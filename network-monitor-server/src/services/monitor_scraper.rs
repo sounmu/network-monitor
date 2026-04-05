@@ -1,24 +1,33 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use sqlx::PgPool;
 use tokio::time::Instant;
 
 use crate::models::app_state::AppState;
-use crate::repositories::{http_monitors_repo, ping_monitors_repo};
+use crate::repositories::{alert_history_repo, http_monitors_repo, ping_monitors_repo};
+use crate::services::alert_service;
 
 /// Minimum scrape interval to prevent excessive polling
 const MIN_INTERVAL_SECS: u64 = 10;
+/// Alert cooldown per monitor to prevent spam (seconds)
+const MONITOR_ALERT_COOLDOWN_SECS: u64 = 300;
+
+/// Per-monitor alert state tracking
+struct MonitorAlertState {
+    is_failing: bool,
+    last_alert: Option<Instant>,
+}
 
 /// Start the HTTP and Ping monitor scraper as a background task.
 /// Runs every 10 seconds — each monitor tracks its own interval via last_checked timestamps.
-pub fn spawn_monitor_scraper(state: Arc<AppState>) {
+pub fn spawn_monitor_scraper(state: Arc<AppState>) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         // Track last check time per monitor
-        let mut http_last_checked: std::collections::HashMap<i32, Instant> =
-            std::collections::HashMap::new();
-        let mut ping_last_checked: std::collections::HashMap<i32, Instant> =
-            std::collections::HashMap::new();
+        let mut http_last_checked: HashMap<i32, Instant> = HashMap::new();
+        let mut ping_last_checked: HashMap<i32, Instant> = HashMap::new();
+        // Track alert state per monitor (keyed by "http:{id}" or "ping:{id}")
+        let mut alert_state: HashMap<String, MonitorAlertState> = HashMap::new();
 
         loop {
             tokio::time::sleep(Duration::from_secs(MIN_INTERVAL_SECS)).await;
@@ -33,7 +42,16 @@ pub fn spawn_monitor_scraper(state: Arc<AppState>) {
 
                     if should_check {
                         http_last_checked.insert(monitor.id, Instant::now());
-                        check_http_endpoint(&state.db_pool, &state.http_client, monitor).await;
+                        let error =
+                            check_http_endpoint(&state.db_pool, &state.http_client, monitor).await;
+                        handle_monitor_alert(
+                            &state,
+                            &mut alert_state,
+                            &format!("http:{}", monitor.id),
+                            &monitor.name,
+                            error,
+                        )
+                        .await;
                     }
                 }
             }
@@ -48,19 +66,95 @@ pub fn spawn_monitor_scraper(state: Arc<AppState>) {
 
                     if should_check {
                         ping_last_checked.insert(monitor.id, Instant::now());
-                        check_ping_host(&state.db_pool, monitor).await;
+                        let error = check_ping_host(&state.db_pool, monitor).await;
+                        handle_monitor_alert(
+                            &state,
+                            &mut alert_state,
+                            &format!("ping:{}", monitor.id),
+                            &monitor.name,
+                            error,
+                        )
+                        .await;
                     }
                 }
             }
         }
-    });
+    })
 }
 
+/// Handle alert state transitions for a monitor check result.
+/// Sends failure alerts (with cooldown) and recovery alerts.
+async fn handle_monitor_alert(
+    state: &AppState,
+    alert_state: &mut HashMap<String, MonitorAlertState>,
+    key: &str,
+    name: &str,
+    error: Option<String>,
+) {
+    let entry = alert_state.entry(key.to_string()).or_insert(MonitorAlertState {
+        is_failing: false,
+        last_alert: None,
+    });
+
+    let cooldown = Duration::from_secs(MONITOR_ALERT_COOLDOWN_SECS);
+
+    if let Some(err_msg) = error {
+        // Failure: send alert if cooldown has passed
+        let should_alert = entry
+            .last_alert
+            .is_none_or(|t| t.elapsed() >= cooldown);
+
+        if should_alert {
+            let monitor_type = if key.starts_with("http:") {
+                "HTTP"
+            } else {
+                "Ping"
+            };
+            let msg = format!(
+                "🚨 **[{} Monitor Down]** `{}` — {}",
+                monitor_type, name, err_msg
+            );
+            alert_service::send_alert(&state.http_client, &state.db_pool, &msg).await;
+            let _ = alert_history_repo::insert_alert(
+                &state.db_pool,
+                key,
+                "monitor_down",
+                &msg,
+            )
+            .await;
+            entry.last_alert = Some(Instant::now());
+        }
+        entry.is_failing = true;
+    } else if entry.is_failing {
+        // Recovery: was failing, now succeeds
+        let monitor_type = if key.starts_with("http:") {
+            "HTTP"
+        } else {
+            "Ping"
+        };
+        let msg = format!(
+            "✅ **[{} Monitor Recovery]** `{}` — back online",
+            monitor_type, name
+        );
+        alert_service::send_alert(&state.http_client, &state.db_pool, &msg).await;
+        let _ = alert_history_repo::insert_alert(
+            &state.db_pool,
+            key,
+            "monitor_recovery",
+            &msg,
+        )
+        .await;
+        entry.is_failing = false;
+        entry.last_alert = None;
+    }
+}
+
+/// Check an HTTP endpoint. Returns Some(error_message) on failure, None on success.
 async fn check_http_endpoint(
-    pool: &PgPool,
+    pool: &sqlx::PgPool,
     client: &reqwest::Client,
     monitor: &http_monitors_repo::HttpMonitor,
-) {
+) -> Option<String> {
     let timeout = Duration::from_millis(monitor.timeout_ms.max(1000) as u64);
     let start = Instant::now();
 
@@ -94,6 +188,8 @@ async fn check_http_endpoint(
             {
                 tracing::error!(monitor_id = monitor.id, err = ?e, "⚠️ [HTTP Monitor] Failed to store result");
             }
+
+            error
         }
         Err(e) => {
             let elapsed = start.elapsed().as_millis() as i32;
@@ -114,16 +210,21 @@ async fn check_http_endpoint(
             {
                 tracing::error!(monitor_id = monitor.id, err = ?e, "⚠️ [HTTP Monitor] Failed to store result");
             }
+
+            Some(error_msg)
         }
     }
 }
 
-async fn check_ping_host(pool: &PgPool, monitor: &ping_monitors_repo::PingMonitor) {
+/// Check a ping (TCP connect) host. Returns Some(error_message) on failure, None on success.
+async fn check_ping_host(
+    pool: &sqlx::PgPool,
+    monitor: &ping_monitors_repo::PingMonitor,
+) -> Option<String> {
     let timeout = Duration::from_millis(monitor.timeout_ms.max(1000) as u64);
 
     // Use tokio TCP connect as a cross-platform "ping" alternative.
     // True ICMP ping requires raw sockets (root/CAP_NET_RAW) which is impractical in Docker.
-    // TCP connect to port 80/443 achieves the same reachability check.
     let target = if monitor.host.contains(':') {
         monitor.host.clone()
     } else {
@@ -136,26 +237,31 @@ async fn check_ping_host(pool: &PgPool, monitor: &ping_monitors_repo::PingMonito
             let rtt = start.elapsed().as_secs_f64() * 1000.0;
             let _ =
                 ping_monitors_repo::insert_result(pool, monitor.id, Some(rtt), true, None).await;
+            None
         }
         Ok(Err(e)) => {
+            let error_msg = e.to_string();
             let _ = ping_monitors_repo::insert_result(
                 pool,
                 monitor.id,
                 None,
                 false,
-                Some(&e.to_string()),
+                Some(&error_msg),
             )
             .await;
+            Some(error_msg)
         }
         Err(_) => {
+            let error_msg = format!("Timeout after {}ms", monitor.timeout_ms);
             let _ = ping_monitors_repo::insert_result(
                 pool,
                 monitor.id,
                 None,
                 false,
-                Some(&format!("Timeout after {}ms", monitor.timeout_ms)),
+                Some(&error_msg),
             )
             .await;
+            Some(error_msg)
         }
     }
 }

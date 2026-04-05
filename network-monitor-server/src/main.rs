@@ -132,8 +132,8 @@ async fn main() -> anyhow::Result<()> {
         .layer(compression);
 
     // ── Start background scraper tasks ──
-    services::scraper::start_scraper(Arc::clone(&state));
-    services::monitor_scraper::spawn_monitor_scraper(Arc::clone(&state));
+    let scraper_handle = services::scraper::start_scraper(Arc::clone(&state));
+    let monitor_handle = services::monitor_scraper::spawn_monitor_scraper(Arc::clone(&state));
 
     let host = std::env::var("SERVER_HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
     let port = std::env::var("SERVER_PORT").unwrap_or_else(|_| "3000".to_string());
@@ -150,10 +150,39 @@ async fn main() -> anyhow::Result<()> {
     );
 
     axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
         .await
         .context("Server error during execution")?;
 
+    // ── Graceful shutdown: cancel background tasks ──
+    tracing::info!("🛑 Shutting down background tasks...");
+    scraper_handle.abort();
+    monitor_handle.abort();
+    state.db_pool.close().await;
+    tracing::info!("✅ Shutdown complete.");
+
     Ok(())
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = tokio::signal::ctrl_c();
+
+    #[cfg(unix)]
+    {
+        let mut sigterm =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .expect("failed to install SIGTERM handler");
+        tokio::select! {
+            _ = ctrl_c => tracing::info!("🛑 Received Ctrl+C"),
+            _ = sigterm.recv() => tracing::info!("🛑 Received SIGTERM"),
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        ctrl_c.await.ok();
+        tracing::info!("🛑 Received Ctrl+C");
+    }
 }
 
 async fn add_api_version_header(mut response: Response) -> Response {

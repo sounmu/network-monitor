@@ -25,6 +25,15 @@ function getAuthToken(): string | undefined {
   return getUserToken() || undefined;
 }
 
+/** Handle 401 — clear token and redirect to login */
+function handleUnauthorized(): never {
+  setUserToken(null);
+  if (typeof window !== "undefined") {
+    window.location.href = "/login";
+  }
+  throw new Error("Session expired");
+}
+
 export const fetcher = async <T>(url: string): Promise<T> => {
   const token = getAuthToken();
   const res = await fetch(url, {
@@ -34,6 +43,7 @@ export const fetcher = async <T>(url: string): Promise<T> => {
     },
     mode: "cors",
   });
+  if (res.status === 401) handleUnauthorized();
   if (!res.ok) {
     throw new Error(`API Error: ${res.status} ${res.statusText}`);
   }
@@ -55,6 +65,7 @@ async function apiCall<T>(url: string, method: string, body?: unknown): Promise<
     opts.body = JSON.stringify(body);
   }
   const res = await fetch(url, opts);
+  if (res.status === 401) handleUnauthorized();
   if (!res.ok) {
     const text = await res.text();
     throw new Error(text || `${res.status} ${res.statusText}`);
