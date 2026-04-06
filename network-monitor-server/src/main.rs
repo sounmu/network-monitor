@@ -111,16 +111,39 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
-    // ── Seed continuous aggregate (cannot run inside migration transaction) ──
+    // ── Ensure continuous aggregate covers full retention period (90 days) ──
+    // The refresh policy must match the data retention so long-range queries
+    // (7d, 30d, 90d) always find materialized data in the CA.
+    let _ = sqlx::query(
+        "SELECT remove_continuous_aggregate_policy('metrics_5min', if_not_exists => TRUE)",
+    )
+    .execute(&state.db_pool)
+    .await;
     if let Err(e) = sqlx::query(
-        "CALL refresh_continuous_aggregate('metrics_5min', NOW() - INTERVAL '3 days', NOW())",
+        "SELECT add_continuous_aggregate_policy('metrics_5min', \
+             start_offset => INTERVAL '90 days', \
+             end_offset   => INTERVAL '5 minutes', \
+             schedule_interval => INTERVAL '5 minutes', \
+             if_not_exists => TRUE)",
+    )
+    .execute(&state.db_pool)
+    .await
+    {
+        tracing::warn!(err = ?e, "⚠️ [CA] Failed to update refresh policy");
+    }
+
+    // Seed the CA with existing data (covers full retention window).
+    // On first run this materializes up to 90 days; subsequent starts are fast (no-op for
+    // already-materialized ranges).
+    if let Err(e) = sqlx::query(
+        "CALL refresh_continuous_aggregate('metrics_5min', NOW() - INTERVAL '90 days', NOW())",
     )
     .execute(&state.db_pool)
     .await
     {
         tracing::warn!(err = ?e, "⚠️ [CA] Failed to seed metrics_5min (may not exist yet)");
     } else {
-        tracing::info!("📊 [CA] metrics_5min seeded with last 3 days");
+        tracing::info!("📊 [CA] metrics_5min refreshed (90-day window)");
     }
 
     // ── Pre-populate last_known_status cache from DB ──
