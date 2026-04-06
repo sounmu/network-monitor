@@ -315,12 +315,8 @@ pub async fn process_metrics(
         }
     }
 
-    // ── Persist to DB (stored by host_key = target URL, keeping data isolated even when hostnames collide) ──
-    if let Err(e) =
-        crate::repositories::metrics_repo::insert_metrics(&state.db_pool, metrics, target).await
-    {
-        tracing::error!(host_key = %target, err = ?e, "⚠️  [DB] Insert failed");
-    }
+    // DB persistence is deferred — the caller (scraper) collects ProcessResults
+    // and batch-inserts all metrics in a single query per scrape cycle.
 
     Ok(ProcessResult {
         log_msg: format!(

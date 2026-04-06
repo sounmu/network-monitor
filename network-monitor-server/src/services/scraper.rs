@@ -9,8 +9,18 @@ use reqwest::Client;
 use crate::models::agent_metrics::AgentMetrics;
 use crate::models::app_state::{AlertConfig, AppState, HostRecord};
 use crate::models::sse_payloads::{HostStatusPayload, SseBroadcast};
-use crate::repositories::{alert_configs_repo, hosts_repo};
+use crate::repositories::{alert_configs_repo, hosts_repo, metrics_repo};
 use crate::services::{alert_service, metrics_service};
+
+/// Result of a single host scrape — carries data needed for batch DB persistence.
+enum ScrapeOutcome {
+    /// Scrape succeeded; metrics should be batch-inserted as online.
+    Online(Box<AgentMetrics>),
+    /// Agent unreachable; an offline record should be batch-inserted.
+    Offline,
+    /// Non-recoverable error (e.g., deserialization); no DB insert needed.
+    Failed(String),
+}
 
 /// Server version (from Cargo.toml at build time)
 const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -110,6 +120,7 @@ async fn scrape_all(
 
             async move {
                 let url = host.host_key.clone();
+                let dn = host.display_name.clone();
                 let result = scrape_one(
                     &client,
                     &host.host_key,
@@ -120,7 +131,7 @@ async fn scrape_all(
                     &state,
                 )
                 .await;
-                (url, result)
+                (url, dn, result)
             }
         });
 
@@ -129,17 +140,20 @@ async fn scrape_all(
         .collect::<Vec<_>>()
         .await;
 
+    // ── Collect persist data and update backoff tracking ──
     let mut success_count = 0;
     let mut fail_count = 0;
+    let mut online_batch: Vec<(String, AgentMetrics)> = Vec::new();
+    let mut offline_batch: Vec<(String, String)> = Vec::new();
 
-    for (url, res) in &results {
-        match res {
-            Ok(_) => {
+    for (url, display_name, outcome) in results {
+        match outcome {
+            ScrapeOutcome::Online(metrics) => {
                 success_count += 1;
-                backoff_map.remove(url);
+                backoff_map.remove(&url);
+                online_batch.push((url, *metrics));
             }
-            Err(e) => {
-                tracing::warn!(url = %url, error = %e, "🔴 [Scraper] Target failed");
+            ScrapeOutcome::Offline => {
                 fail_count += 1;
                 let entry = backoff_map.entry(url.clone()).or_insert(HostBackoff {
                     consecutive_failures: 0,
@@ -147,7 +161,41 @@ async fn scrape_all(
                 });
                 entry.consecutive_failures += 1;
                 entry.last_attempt = Instant::now();
+                offline_batch.push((url, display_name));
             }
+            ScrapeOutcome::Failed(e) => {
+                tracing::warn!(url = %url, error = %e, "🔴 [Scraper] Target failed (no DB insert)");
+                fail_count += 1;
+                let entry = backoff_map.entry(url).or_insert(HostBackoff {
+                    consecutive_failures: 0,
+                    last_attempt: Instant::now(),
+                });
+                entry.consecutive_failures += 1;
+                entry.last_attempt = Instant::now();
+            }
+        }
+    }
+
+    // ── Batch DB persistence (single round-trip per type) ──
+    if !online_batch.is_empty() {
+        let batch_refs: Vec<(&str, &AgentMetrics)> = online_batch
+            .iter()
+            .map(|(hk, m)| (hk.as_str(), m))
+            .collect();
+        if let Err(e) = metrics_repo::insert_metrics_batch(&state.db_pool, &batch_refs).await {
+            tracing::error!(err = ?e, count = online_batch.len(), "⚠️ [Scraper] Batch online INSERT failed");
+        }
+    }
+
+    if !offline_batch.is_empty() {
+        let batch_refs: Vec<(&str, &str)> = offline_batch
+            .iter()
+            .map(|(hk, dn)| (hk.as_str(), dn.as_str()))
+            .collect();
+        if let Err(e) =
+            metrics_repo::insert_offline_metrics_batch(&state.db_pool, &batch_refs).await
+        {
+            tracing::error!(err = ?e, count = offline_batch.len(), "⚠️ [Scraper] Batch offline INSERT failed");
         }
     }
 
@@ -168,7 +216,7 @@ async fn scrape_one(
     containers: &[String],
     alert_config: &AlertConfig,
     state: &Arc<AppState>,
-) -> Result<(), String> {
+) -> ScrapeOutcome {
     let ports_str = ports
         .iter()
         .map(|p| p.to_string())
@@ -186,7 +234,7 @@ async fn scrape_one(
 
     let jwt_token = match crate::services::auth::generate_jwt() {
         Ok(t) => t,
-        Err(e) => return Err(format!("JWT Generation Error: {}", e)),
+        Err(e) => return ScrapeOutcome::Failed(format!("JWT Generation Error: {}", e)),
     };
 
     match client
@@ -196,6 +244,9 @@ async fn scrape_one(
         .await
     {
         Ok(resp) if resp.status().is_success() => match resp.bytes().await {
+            Ok(bytes) if bytes.len() > 10 * 1024 * 1024 => {
+                ScrapeOutcome::Failed(format!("Payload too large: {} bytes", bytes.len()))
+            }
             Ok(bytes) => match bincode::deserialize::<AgentMetrics>(&bytes) {
                 Ok(metrics) => {
                     if metrics.agent_version.is_empty() {
@@ -209,20 +260,19 @@ async fn scrape_one(
                             "⚠️ [Scraper] Agent version below minimum — consider upgrading"
                         );
                     }
-                    handle_success(metrics, target, alert_config, state).await;
-                    Ok(())
+                    handle_success(metrics, target, alert_config, state).await
                 }
-                Err(e) => Err(format!("Bincode deserialization error: {}", e)),
+                Err(e) => ScrapeOutcome::Failed(format!("Bincode deserialization error: {}", e)),
             },
-            Err(e) => Err(format!("Failed to read response body: {}", e)),
+            Err(e) => ScrapeOutcome::Failed(format!("Failed to read response body: {}", e)),
         },
-        Ok(resp) => {
+        Ok(_resp) => {
             handle_down(target, display_name, state).await;
-            Err(format!("Bad HTTP status: {}", resp.status()))
+            ScrapeOutcome::Offline
         }
-        Err(e) => {
+        Err(_e) => {
             handle_down(target, display_name, state).await;
-            Err(format!("Unreachable: {}", e))
+            ScrapeOutcome::Offline
         }
     }
 }
@@ -236,7 +286,7 @@ async fn handle_success(
     target: &str,
     alert_config: &AlertConfig,
     state: &Arc<AppState>,
-) {
+) -> ScrapeOutcome {
     // Auto-register host and update display_name if needed
     if let Err(e) =
         hosts_repo::ensure_host_registered(&state.db_pool, target, &metrics.hostname).await
@@ -260,7 +310,8 @@ async fn handle_success(
             }
         }
         Err(e) => {
-            tracing::error!(target = %target, err = ?e, "⚠️  [Scraper] process_metrics error")
+            tracing::error!(target = %target, err = ?e, "⚠️  [Scraper] process_metrics error");
+            return ScrapeOutcome::Failed(format!("process_metrics error: {}", e));
         }
     }
 
@@ -268,10 +319,10 @@ async fn handle_success(
     let recovery_msg = {
         let mut store = match state.store.write() {
             Ok(s) => s,
-            Err(_) => return,
+            Err(_) => return ScrapeOutcome::Online(Box::new(metrics)),
         };
         let Some(record) = store.hosts.get_mut(target) else {
-            return;
+            return ScrapeOutcome::Online(Box::new(metrics));
         };
 
         if record.alert_state.offline_alerted {
@@ -304,6 +355,8 @@ async fn handle_success(
         )
         .await;
     }
+
+    ScrapeOutcome::Online(Box::new(metrics))
 }
 
 // ──────────────────────────────────────────────
@@ -314,13 +367,8 @@ async fn handle_down(target: &str, display_name: &str, state: &Arc<AppState>) {
     let now = Instant::now();
     let host_key = target.to_string();
 
-    // Record an offline metric so uptime calculation reflects downtime
-    let dn = display_name.to_string();
-    if let Err(e) =
-        crate::repositories::metrics_repo::insert_offline_metric(&state.db_pool, target, &dn).await
-    {
-        tracing::error!(target = %target, err = ?e, "⚠️ [Scraper] Failed to record offline metric");
-    }
+    // DB persistence is deferred — the caller (scrape_all) collects offline hosts
+    // and batch-inserts them in a single query per scrape cycle.
 
     let alert_msg = {
         let mut store = match state.store.write() {

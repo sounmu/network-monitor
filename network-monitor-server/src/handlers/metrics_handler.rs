@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::Json;
@@ -104,6 +105,75 @@ pub async fn get_uptime(
     let days = query.days.unwrap_or(30).min(90);
     let summary = metrics_repo::fetch_uptime(&state.db_pool, &host_key, days).await?;
     Ok(Json(summary))
+}
+
+/// Request body for batch metrics query
+#[derive(Deserialize)]
+pub struct BatchMetricsRequest {
+    pub host_keys: Vec<String>,
+    pub start: DateTime<Utc>,
+    pub end: DateTime<Utc>,
+}
+
+/// POST /api/metrics/batch — fetch metrics for multiple hosts in a single request.
+///
+/// Reduces HTTP overhead when the dashboard renders charts for many hosts simultaneously.
+/// Each host_key is queried concurrently, with cache applied for long-range queries.
+pub async fn batch_metrics(
+    _auth: AuthGuard,
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<BatchMetricsRequest>,
+) -> Result<Json<HashMap<String, Vec<MetricsRow>>>, AppError> {
+    if req.host_keys.is_empty() {
+        return Ok(Json(HashMap::new()));
+    }
+    if req.host_keys.len() > 50 {
+        return Err(AppError::BadRequest(
+            "Too many host_keys (max 50)".to_string(),
+        ));
+    }
+    if req.start > req.end {
+        return Err(AppError::BadRequest(
+            "start must not be later than end".to_string(),
+        ));
+    }
+
+    let duration_hours = (req.end - req.start).num_hours();
+    let use_cache = duration_hours > 6;
+
+    let futs = req.host_keys.iter().map(|host_key| {
+        let pool = &state.db_pool;
+        let cache = &state.metrics_query_cache;
+        let start = req.start;
+        let end = req.end;
+        let hk = host_key.clone();
+
+        async move {
+            let rows = if use_cache {
+                let cache_key =
+                    MetricsQueryCache::make_key(&hk, start.timestamp(), end.timestamp());
+                if let Some(cached) = cache.get(&cache_key) {
+                    cached
+                } else {
+                    let result = metrics_repo::fetch_metrics_range(pool, &hk, start, end).await?;
+                    cache.insert(cache_key, result.clone());
+                    result
+                }
+            } else {
+                metrics_repo::fetch_metrics_range(pool, &hk, start, end).await?
+            };
+            Ok::<(String, Vec<MetricsRow>), AppError>((hk, rows))
+        }
+    });
+
+    let results = futures::future::join_all(futs).await;
+    let mut map = HashMap::with_capacity(req.host_keys.len());
+    for result in results {
+        let (hk, rows) = result?;
+        map.insert(hk, rows);
+    }
+
+    Ok(Json(map))
 }
 
 /// Public status response (no auth required)

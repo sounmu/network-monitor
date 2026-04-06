@@ -338,4 +338,12 @@ export const setupAdmin = (username: string, password: string) =>
 export const getMe = () =>
   apiCall<UserInfo>(`${API_BASE}/api/auth/me`, "GET");
 
+// Batch metrics query — fetch metrics for multiple hosts in a single request
+export const fetchBatchMetrics = (hostKeys: string[], start: string, end: string) =>
+  apiCall<Record<string, MetricsRow[]>>(`${API_BASE}/api/metrics/batch`, "POST", {
+    host_keys: hostKeys,
+    start,
+    end,
+  });
+
 export type { MetricsRow, HostsApiResponse };

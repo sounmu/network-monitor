@@ -292,82 +292,84 @@ pub async fn init_db(pool: &PgPool) -> Result<(), sqlx::Error> {
 // ──────────────────────────────────────────────
 
 /// Persist collected agent metrics to the database.
-///
-/// `host_key` is the target-URL-based unique identifier — keeps data separate even when
-/// multiple agents report the same OS hostname.
-/// JSONB columns are serialised with serde_json; serialisation failures store NULL (no panic).
-#[tracing::instrument(skip(pool, metrics), fields(host_key = %host_key))]
-pub async fn insert_metrics(
+/// Batch-insert metrics for multiple hosts in a single query.
+/// Reduces DB round-trips from N (one per host) to 1 per scrape cycle.
+pub async fn insert_metrics_batch(
     pool: &PgPool,
-    metrics: &AgentMetrics,
-    host_key: &str,
-) -> Result<i64, sqlx::Error> {
-    let networks_json = serde_json::to_value(&metrics.network).ok();
-    let docker_json = serde_json::to_value(&metrics.docker_containers).ok();
-    let ports_json = serde_json::to_value(&metrics.ports).ok();
-    let disks_json = serde_json::to_value(&metrics.system.disks).ok();
-    let processes_json = serde_json::to_value(&metrics.system.processes).ok();
-    let temperatures_json = serde_json::to_value(&metrics.system.temperatures).ok();
-    let gpus_json = serde_json::to_value(&metrics.system.gpus).ok();
+    batch: &[(&str, &AgentMetrics)],
+) -> Result<(), sqlx::Error> {
+    if batch.is_empty() {
+        return Ok(());
+    }
 
-    let row: (i64,) = sqlx::query_as(
-        r#"
-        INSERT INTO metrics (
-            host_key, display_name, is_online,
-            cpu_usage_percent, memory_usage_percent,
-            load_1min, load_5min, load_15min,
-            networks, docker_containers, ports, disks,
-            processes, temperatures, gpus
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-        RETURNING id
-        "#,
-    )
-    .bind(host_key)
-    .bind(&metrics.hostname) // display_name = agent-reported hostname
-    .bind(metrics.is_online)
-    .bind(metrics.system.cpu_usage_percent)
-    .bind(metrics.system.memory_usage_percent)
-    .bind(metrics.load_average.one_min as f32)
-    .bind(metrics.load_average.five_min as f32)
-    .bind(metrics.load_average.fifteen_min as f32)
-    .bind(&networks_json)
-    .bind(&docker_json)
-    .bind(&ports_json)
-    .bind(&disks_json)
-    .bind(&processes_json)
-    .bind(&temperatures_json)
-    .bind(&gpus_json)
-    .fetch_one(pool)
-    .await?;
+    let mut qb: sqlx::QueryBuilder<sqlx::Postgres> = sqlx::QueryBuilder::new(
+        "INSERT INTO metrics (\
+         host_key, display_name, is_online, \
+         cpu_usage_percent, memory_usage_percent, \
+         load_1min, load_5min, load_15min, \
+         networks, docker_containers, ports, disks, \
+         processes, temperatures, gpus) ",
+    );
 
-    Ok(row.0)
+    qb.push_values(batch, |mut b, (host_key, metrics)| {
+        let networks_json = serde_json::to_value(&metrics.network).ok();
+        let docker_json = serde_json::to_value(&metrics.docker_containers).ok();
+        let ports_json = serde_json::to_value(&metrics.ports).ok();
+        let disks_json = serde_json::to_value(&metrics.system.disks).ok();
+        let processes_json = serde_json::to_value(&metrics.system.processes).ok();
+        let temperatures_json = serde_json::to_value(&metrics.system.temperatures).ok();
+        let gpus_json = serde_json::to_value(&metrics.system.gpus).ok();
+
+        b.push_bind(host_key.to_string())
+            .push_bind(metrics.hostname.clone())
+            .push_bind(metrics.is_online)
+            .push_bind(metrics.system.cpu_usage_percent)
+            .push_bind(metrics.system.memory_usage_percent)
+            .push_bind(metrics.load_average.one_min as f32)
+            .push_bind(metrics.load_average.five_min as f32)
+            .push_bind(metrics.load_average.fifteen_min as f32)
+            .push_bind(networks_json)
+            .push_bind(docker_json)
+            .push_bind(ports_json)
+            .push_bind(disks_json)
+            .push_bind(processes_json)
+            .push_bind(temperatures_json)
+            .push_bind(gpus_json);
+    });
+
+    qb.build().execute(pool).await?;
+    Ok(())
 }
 
-/// Insert a minimal offline metric record so the uptime calculation reflects downtime.
-/// Called by the scraper when an agent is unreachable — ensures `is_online=false` rows exist.
-pub async fn insert_offline_metric(
+/// Batch-insert offline metric records for multiple unreachable hosts.
+pub async fn insert_offline_metrics_batch(
     pool: &PgPool,
-    host_key: &str,
-    display_name: &str,
-) -> Result<i64, sqlx::Error> {
-    let row: (i64,) = sqlx::query_as(
-        r#"
-        INSERT INTO metrics (
-            host_key, display_name, is_online,
-            cpu_usage_percent, memory_usage_percent,
-            load_1min, load_5min, load_15min
-        )
-        VALUES ($1, $2, false, 0, 0, 0, 0, 0)
-        RETURNING id
-        "#,
-    )
-    .bind(host_key)
-    .bind(display_name)
-    .fetch_one(pool)
-    .await?;
+    batch: &[(&str, &str)], // (host_key, display_name)
+) -> Result<(), sqlx::Error> {
+    if batch.is_empty() {
+        return Ok(());
+    }
 
-    Ok(row.0)
+    let mut qb: sqlx::QueryBuilder<sqlx::Postgres> = sqlx::QueryBuilder::new(
+        "INSERT INTO metrics (\
+         host_key, display_name, is_online, \
+         cpu_usage_percent, memory_usage_percent, \
+         load_1min, load_5min, load_15min) ",
+    );
+
+    qb.push_values(batch, |mut b, (host_key, display_name)| {
+        b.push_bind(host_key.to_string())
+            .push_bind(display_name.to_string())
+            .push_bind(false)
+            .push_bind(0.0_f32)
+            .push_bind(0.0_f32)
+            .push_bind(0.0_f32)
+            .push_bind(0.0_f32)
+            .push_bind(0.0_f32);
+    });
+
+    qb.build().execute(pool).await?;
+    Ok(())
 }
 
 // ──────────────────────────────────────────────
@@ -473,20 +475,11 @@ pub async fn fetch_metrics_range(
         .fetch_all(pool)
         .await?;
         Ok(rows)
-    } else {
-        // Long range (>6h): downsample with time_bucket.
-        // Network bytes are cumulative counters — MAX gives the end-of-bucket value,
-        // which is correct for the frontend's consecutive-point rate calculation.
-        let bucket_interval = if hours <= 72 {
-            "1 minute" // 6h–3d: ~4,320 buckets max
-        } else if hours <= 336 {
-            "5 minutes" // 3d–14d: ~4,032 buckets max
-        } else {
-            "15 minutes" // >14d: ~2,880 buckets max
-        };
-
-        let query = format!(
-            r#"
+    } else if hours <= 72 {
+        // Mid range (6h–3d): 1-minute buckets from raw table.
+        // CA is 5-min granularity so 1-min buckets must come from raw data.
+        // This range is recent and uncompressed, so performance is acceptable.
+        let query = r#"
             SELECT
                 0::BIGINT AS id,
                 $1::VARCHAR AS host_key,
@@ -507,23 +500,98 @@ pub async fn fetch_metrics_range(
                 NULL::jsonb AS processes,
                 NULL::jsonb AS temperatures,
                 NULL::jsonb AS gpus,
-                time_bucket('{interval}', timestamp) AS timestamp
+                time_bucket('1 minute', timestamp) AS timestamp
             FROM metrics
             WHERE host_key = $1
               AND timestamp >= $2
               AND timestamp <= $3
-            GROUP BY time_bucket('{interval}', timestamp)
+            GROUP BY time_bucket('1 minute', timestamp)
             ORDER BY timestamp ASC
-            "#,
-            interval = bucket_interval,
-        );
+        "#;
 
-        let rows = sqlx::query_as::<_, MetricsRow>(&query)
+        let rows = sqlx::query_as::<_, MetricsRow>(query)
             .bind(host_key)
             .bind(start)
             .bind(end)
             .fetch_all(pool)
             .await?;
+        Ok(rows)
+    } else if hours <= 336 {
+        // Long range (3d–14d): read directly from metrics_5min continuous aggregate.
+        // No GROUP BY needed — CA bucket size matches exactly.
+        let rows = sqlx::query_as::<_, MetricsRow>(
+            r#"
+            SELECT
+                0::BIGINT AS id,
+                $1::VARCHAR AS host_key,
+                ''::VARCHAR AS display_name,
+                is_online,
+                cpu_usage_percent,
+                memory_usage_percent,
+                load_1min, load_5min, load_15min,
+                jsonb_build_object(
+                    'total_rx_bytes', total_rx_bytes,
+                    'total_tx_bytes', total_tx_bytes
+                ) AS networks,
+                NULL::jsonb AS docker_containers,
+                NULL::jsonb AS ports,
+                NULL::jsonb AS disks,
+                NULL::jsonb AS processes,
+                NULL::jsonb AS temperatures,
+                NULL::jsonb AS gpus,
+                bucket AS timestamp
+            FROM metrics_5min
+            WHERE host_key = $1
+              AND bucket >= $2
+              AND bucket <= $3
+            ORDER BY bucket ASC
+            "#,
+        )
+        .bind(host_key)
+        .bind(start)
+        .bind(end)
+        .fetch_all(pool)
+        .await?;
+        Ok(rows)
+    } else {
+        // Very long range (>14d): re-aggregate metrics_5min into 15-min buckets.
+        // Reads ~8,640 pre-aggregated rows instead of millions of raw rows.
+        let rows = sqlx::query_as::<_, MetricsRow>(
+            r#"
+            SELECT
+                0::BIGINT AS id,
+                $1::VARCHAR AS host_key,
+                ''::VARCHAR AS display_name,
+                bool_and(is_online) AS is_online,
+                AVG(cpu_usage_percent)::REAL AS cpu_usage_percent,
+                AVG(memory_usage_percent)::REAL AS memory_usage_percent,
+                AVG(load_1min)::REAL AS load_1min,
+                AVG(load_5min)::REAL AS load_5min,
+                AVG(load_15min)::REAL AS load_15min,
+                jsonb_build_object(
+                    'total_rx_bytes', MAX(total_rx_bytes),
+                    'total_tx_bytes', MAX(total_tx_bytes)
+                ) AS networks,
+                NULL::jsonb AS docker_containers,
+                NULL::jsonb AS ports,
+                NULL::jsonb AS disks,
+                NULL::jsonb AS processes,
+                NULL::jsonb AS temperatures,
+                NULL::jsonb AS gpus,
+                time_bucket('15 minutes', bucket) AS timestamp
+            FROM metrics_5min
+            WHERE host_key = $1
+              AND bucket >= $2
+              AND bucket <= $3
+            GROUP BY time_bucket('15 minutes', bucket)
+            ORDER BY timestamp ASC
+            "#,
+        )
+        .bind(host_key)
+        .bind(start)
+        .bind(end)
+        .fetch_all(pool)
+        .await?;
         Ok(rows)
     }
 }
@@ -624,7 +692,8 @@ pub struct UptimeSummary {
 }
 
 /// Compute daily uptime percentage for a host over the given number of days.
-/// Uses TimescaleDB time_bucket for efficient daily aggregation.
+/// Uses the metrics_5min continuous aggregate for efficient daily re-aggregation.
+/// sample_count provides weighted averages for accurate uptime calculation.
 pub async fn fetch_uptime(
     pool: &PgPool,
     host_key: &str,
@@ -633,17 +702,18 @@ pub async fn fetch_uptime(
     let daily = sqlx::query_as::<_, UptimePoint>(
         r#"
         SELECT
-            time_bucket('1 day', timestamp) AS day,
-            COUNT(*)::BIGINT AS total_count,
-            COUNT(*) FILTER (WHERE is_online = true)::BIGINT AS online_count,
+            time_bucket('1 day', bucket) AS day,
+            SUM(sample_count)::BIGINT AS total_count,
+            SUM(CASE WHEN is_online THEN sample_count ELSE 0 END)::BIGINT AS online_count,
             CASE
-                WHEN COUNT(*) > 0
-                THEN (COUNT(*) FILTER (WHERE is_online = true)::FLOAT / COUNT(*)::FLOAT) * 100.0
+                WHEN SUM(sample_count) > 0
+                THEN (SUM(CASE WHEN is_online THEN sample_count ELSE 0 END)::FLOAT
+                      / SUM(sample_count)::FLOAT) * 100.0
                 ELSE 0.0
             END AS uptime_pct
-        FROM metrics
+        FROM metrics_5min
         WHERE host_key = $1
-          AND timestamp >= NOW() - ($2 || ' days')::INTERVAL
+          AND bucket >= NOW() - ($2 || ' days')::INTERVAL
         GROUP BY day
         ORDER BY day ASC
         "#,

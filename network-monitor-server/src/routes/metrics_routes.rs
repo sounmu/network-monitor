@@ -15,7 +15,8 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/", get(metrics_handler::root_handler))
         // Prometheus metrics export (no auth — designed for Prometheus scraper)
         .route("/metrics", get(metrics_handler::prometheus_metrics))
-        // Metrics query
+        // Metrics query (batch must be registered before {host_key} to avoid capture)
+        .route("/api/metrics/batch", post(metrics_handler::batch_metrics))
         .route(
             "/api/metrics/{host_key}",
             get(metrics_handler::get_metrics_by_host_key),
