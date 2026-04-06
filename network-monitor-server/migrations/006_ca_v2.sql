@@ -41,5 +41,6 @@ SELECT add_continuous_aggregate_policy('metrics_5min',
 CREATE INDEX IF NOT EXISTS idx_metrics_5min_host_bucket
     ON metrics_5min (host_key, bucket DESC);
 
--- Step 6: Seed the last 3 days so the CA is immediately useful
-CALL refresh_continuous_aggregate('metrics_5min', NOW() - INTERVAL '3 days', NOW());
+-- Note: CALL refresh_continuous_aggregate() cannot run inside a transaction block
+-- (sqlx wraps each migration in a transaction). The initial CA seed is performed
+-- by the server startup code in main.rs instead.

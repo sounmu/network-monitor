@@ -111,6 +111,18 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
+    // ── Seed continuous aggregate (cannot run inside migration transaction) ──
+    if let Err(e) = sqlx::query(
+        "CALL refresh_continuous_aggregate('metrics_5min', NOW() - INTERVAL '3 days', NOW())",
+    )
+    .execute(&state.db_pool)
+    .await
+    {
+        tracing::warn!(err = ?e, "⚠️ [CA] Failed to seed metrics_5min (may not exist yet)");
+    } else {
+        tracing::info!("📊 [CA] metrics_5min seeded with last 3 days");
+    }
+
     // ── Pre-populate last_known_status cache from DB ──
     match repositories::hosts_repo::list_hosts(&state.db_pool).await {
         Ok(hosts) => {
