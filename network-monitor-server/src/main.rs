@@ -192,15 +192,26 @@ async fn main() -> anyhow::Result<()> {
         scrape_interval_secs
     );
 
+    // Graceful shutdown with drain timeout for long-lived connections (SSE).
+    // When the signal fires, a 5-second kill timer spawns. If the drain
+    // completes before the timer, cleanup runs normally. If not,
+    // process::exit forces termination (DB handles connection cleanup).
     axum::serve(
         listener,
         app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
-    .with_graceful_shutdown(shutdown_signal())
+    .with_graceful_shutdown(async {
+        shutdown_signal().await;
+        tokio::spawn(async {
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            tracing::warn!("⚠️ Graceful drain timed out after 5s — forcing exit");
+            std::process::exit(0);
+        });
+    })
     .await
     .context("Server error during execution")?;
 
-    // ── Graceful shutdown: cancel background tasks ──
+    // ── Cleanup background tasks and DB pool ──
     tracing::info!("🛑 Shutting down background tasks...");
     scraper_handle.abort();
     monitor_handle.abort();
