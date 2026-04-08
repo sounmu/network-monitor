@@ -2,7 +2,9 @@
 
 import {
   createContext,
+  useCallback,
   useContext,
+  useMemo,
   useState,
   useEffect,
   type ReactNode,
@@ -63,23 +65,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [isLoading, user, pathname, router]);
 
-  const login = (token: string, userInfo: UserInfo) => {
+  const login = useCallback((token: string, userInfo: UserInfo) => {
     setUserToken(token);
     setUser(userInfo);
-  };
+  }, []);
 
-  const logout = () => {
+  const logout = useCallback(() => {
     setUserToken(null);
     setUser(null);
     router.replace("/login");
-  };
+  }, [router]);
+
+  const value = useMemo(
+    () => ({ user, isLoading, login, logout }),
+    [user, isLoading, login, logout],
+  );
 
   if (isLoading) {
     return null;
   }
 
   return (
-    <AuthContext.Provider value={{ user, isLoading, login, logout }}>
+    <AuthContext.Provider value={value}>
       {children}
     </AuthContext.Provider>
   );
