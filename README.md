@@ -44,6 +44,10 @@
 - SSRF protection on webhooks, HTTP monitors, and ping monitors
 - Token revocation on password change (iat + password_changed_at)
 - Security headers (X-Content-Type-Options, X-Frame-Options, Referrer-Policy)
+- Toast notifications for login errors (401/429/network) with i18n support
+- TimescaleDB compression on alert/monitor history tables (50-70% storage savings)
+- Batched SSE updates via requestAnimationFrame (reduced re-renders)
+- Lazy-loaded chart components for faster initial page load
 
 ---
 
@@ -63,7 +67,7 @@ graph LR
 **Data flow:**
 1. Server scrapes each registered agent every 10 s (configurable), batch-inserts metrics in a single query
 2. Metrics stored in TimescaleDB hypertable (90-day retention) + 5-min continuous aggregate for fast long-range queries
-3. Browser connects to SSE stream for real-time updates (10 s push, in-memory — no DB hit)
+3. Browser connects to SSE stream for real-time updates (10 s push, in-memory — no DB hit, rAF-batched)
 4. REST API with automatic downsampling: ≤6h raw, 6h-3d 1-min, 3d-14d 5-min (CA), >14d 15-min (CA)
 5. Alerts delivered to Discord, Slack, and/or Email channels
 
@@ -252,11 +256,11 @@ All endpoints require `Authorization: Bearer <JWT>` unless noted. Mutation endpo
 | **`notification_channels`** | Alert delivery targets (Discord webhook, Slack webhook, Email SMTP). Config stored as JSONB. |
 | **`dashboard_layouts`** | Per-user dashboard widget layout (JSONB). |
 | **`users`** | User accounts with Argon2 password hashing. Roles: admin, viewer. Tracks `password_changed_at` for token revocation. |
-| **`alert_history`** | Immutable log of all alert events with timestamps. TimescaleDB hypertable, 90-day retention. |
+| **`alert_history`** | Immutable log of all alert events with timestamps. TimescaleDB hypertable, 90-day retention, compression after 7 days. |
 | **`http_monitors`** | External HTTP endpoint monitors with check intervals. |
-| **`http_monitor_results`** | HTTP check results (status code, response time, errors). TimescaleDB hypertable, 90-day retention. |
+| **`http_monitor_results`** | HTTP check results (status code, response time, errors). TimescaleDB hypertable, 90-day retention, compression after 7 days. |
 | **`ping_monitors`** | Network host reachability monitors (TCP connect). |
-| **`ping_results`** | Ping check results (RTT, success/failure). TimescaleDB hypertable, 90-day retention. |
+| **`ping_results`** | Ping check results (RTT, success/failure). TimescaleDB hypertable, 90-day retention, compression after 7 days. |
 
 ---
 
@@ -265,7 +269,7 @@ All endpoints require `Authorization: Bearer <JWT>` unless noted. Mutation endpo
 | Component | Technology |
 |---|---|
 | Backend | Rust, Axum 0.8, sqlx 0.8, TimescaleDB, lettre (SMTP) |
-| Frontend | Next.js 16, React 19, Recharts, SWR |
+| Frontend | Next.js 16, React 19, Recharts, SWR, sonner (toast) |
 | Agent | Rust, tokio, sysinfo, bollard (Docker), nvml-wrapper (NVIDIA GPU) |
 | Database | PostgreSQL 15 + TimescaleDB extension |
 | Deployment | Docker Compose, Cloudflare Tunnel |
