@@ -312,14 +312,6 @@ pub async fn insert_metrics_batch(
     );
 
     qb.push_values(batch, |mut b, (host_key, metrics)| {
-        let networks_json = serde_json::to_value(&metrics.network).ok();
-        let docker_json = serde_json::to_value(&metrics.docker_containers).ok();
-        let ports_json = serde_json::to_value(&metrics.ports).ok();
-        let disks_json = serde_json::to_value(&metrics.system.disks).ok();
-        let processes_json = serde_json::to_value(&metrics.system.processes).ok();
-        let temperatures_json = serde_json::to_value(&metrics.system.temperatures).ok();
-        let gpus_json = serde_json::to_value(&metrics.system.gpus).ok();
-
         b.push_bind(host_key.to_string())
             .push_bind(metrics.hostname.clone())
             .push_bind(metrics.is_online)
@@ -328,13 +320,13 @@ pub async fn insert_metrics_batch(
             .push_bind(metrics.load_average.one_min as f32)
             .push_bind(metrics.load_average.five_min as f32)
             .push_bind(metrics.load_average.fifteen_min as f32)
-            .push_bind(networks_json)
-            .push_bind(docker_json)
-            .push_bind(ports_json)
-            .push_bind(disks_json)
-            .push_bind(processes_json)
-            .push_bind(temperatures_json)
-            .push_bind(gpus_json);
+            .push_bind(sqlx::types::Json(&metrics.network))
+            .push_bind(sqlx::types::Json(&metrics.docker_containers))
+            .push_bind(sqlx::types::Json(&metrics.ports))
+            .push_bind(sqlx::types::Json(&metrics.system.disks))
+            .push_bind(sqlx::types::Json(&metrics.system.processes))
+            .push_bind(sqlx::types::Json(&metrics.system.temperatures))
+            .push_bind(sqlx::types::Json(&metrics.system.gpus));
     });
 
     qb.build().execute(pool).await?;

@@ -66,43 +66,34 @@ pub async fn load_all_as_map(pool: &PgPool) -> Result<HashMap<String, AlertConfi
         }
     }
 
-    // Build per-host configs, falling back to global where no override exists
+    // Build per-host configs using a single-pass lookup table: (host_key, metric_type) → rule
     let mut map = HashMap::new();
+    let mut host_overrides: HashMap<(&str, &str), MetricAlertRule> = HashMap::new();
+    let mut host_keys_set = std::collections::HashSet::new();
 
-    // Collect all distinct host_keys that have overrides
-    let host_keys: Vec<String> = rows
-        .iter()
-        .filter_map(|r| r.host_key.clone())
-        .collect::<std::collections::HashSet<_>>()
-        .into_iter()
-        .collect();
+    for row in &rows {
+        if let Some(ref hk) = row.host_key {
+            host_overrides.insert((hk.as_str(), row.metric_type.as_str()), row_to_rule(row));
+            host_keys_set.insert(hk.as_str());
+        }
+    }
 
-    for hk in host_keys {
-        let host_rows: Vec<_> = rows
-            .iter()
-            .filter(|r| r.host_key.as_deref() == Some(&hk))
-            .collect();
-
-        let cpu = host_rows
-            .iter()
-            .find(|r| r.metric_type == "cpu")
-            .map(|r| row_to_rule(r))
+    for hk in host_keys_set {
+        let cpu = host_overrides
+            .get(&(hk, "cpu"))
+            .cloned()
             .unwrap_or(global_cpu.clone());
-
-        let mem = host_rows
-            .iter()
-            .find(|r| r.metric_type == "memory")
-            .map(|r| row_to_rule(r))
+        let mem = host_overrides
+            .get(&(hk, "memory"))
+            .cloned()
             .unwrap_or(global_mem.clone());
-
-        let disk = host_rows
-            .iter()
-            .find(|r| r.metric_type == "disk")
-            .map(|r| row_to_rule(r))
+        let disk = host_overrides
+            .get(&(hk, "disk"))
+            .cloned()
             .unwrap_or(global_disk.clone());
 
         map.insert(
-            hk,
+            hk.to_string(),
             AlertConfig {
                 cpu,
                 memory: mem,

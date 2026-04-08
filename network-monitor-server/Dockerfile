@@ -16,10 +16,11 @@ COPY migrations/ ./migrations/
 COPY src/ ./src/
 RUN touch src/main.rs && cargo build --release && strip target/release/network-monitor-server
 
-# Minimal runtime image
-FROM ubuntu:24.04
+# Minimal runtime image (debian-slim is ~52MB vs ubuntu ~77MB)
+FROM debian:bookworm-slim
 
-RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
 RUN groupadd -r monitor && useradd -r -g monitor -s /usr/sbin/nologin monitor
 

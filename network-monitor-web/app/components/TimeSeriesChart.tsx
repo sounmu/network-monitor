@@ -362,70 +362,52 @@ export default function TimeSeriesChart({ hostKey }: TimeSeriesChartProps) {
     setRange((prev) => ({ ...prev, end: date, preset: "custom" }));
   }, []);
 
-  // ─── Chart data transformation ──
+  // ─── Chart data transformation (single-pass) ──
+  // All chart datasets derived in one useMemo to avoid 5 separate dependency checks
+  // and 5 separate iterations over the sorted array.
 
-  const sorted = useMemo(
-    () =>
-      [...allRows].sort(
-        (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
-      ),
-    [allRows]
-  );
+  const { cpuData, ramData, rxData, txData, loadData, sorted } = useMemo(() => {
+    const s = [...allRows].sort(
+      (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+    );
 
-  const cpuData = useMemo(
-    () => sorted.map((r) => ({ time: r.timestamp, "CPU (%)": +r.cpu_usage_percent.toFixed(1) })),
-    [sorted]
-  );
+    const cpu: { time: string; "CPU (%)": number }[] = [];
+    const ram: { time: string; "RAM (%)": number }[] = [];
+    const load: Record<string, string | number>[] = [];
+    const rx: { time: string; RX: number }[] = [];
+    const tx: { time: string; TX: number }[] = [];
 
-  const ramData = useMemo(
-    () => sorted.map((r) => ({ time: r.timestamp, "RAM (%)": +r.memory_usage_percent.toFixed(1) })),
-    [sorted]
-  );
-
-  const netData = useMemo(() => {
-    if (sorted.length < 2) return [];
-    const result: { time: string; "RX (B/s)": number; "TX (B/s)": number }[] = [];
-    for (let i = 1; i < sorted.length; i++) {
-      const curr = sorted[i];
-      const prev = sorted[i - 1];
-      const currNet = curr.networks;
-      const prevNet = prev.networks;
-      if (!currNet || !prevNet) continue;
-
-      const dtMs = new Date(curr.timestamp).getTime() - new Date(prev.timestamp).getTime();
-      const dtSec = Math.max(dtMs / 1000, 1);
-
-      const rxDelta = currNet.total_rx_bytes - prevNet.total_rx_bytes;
-      const txDelta = currNet.total_tx_bytes - prevNet.total_tx_bytes;
-      result.push({
-        time: curr.timestamp,
-        "RX (B/s)": rxDelta >= 0 ? +(rxDelta / dtSec).toFixed(0) : 0,
-        "TX (B/s)": txDelta >= 0 ? +(txDelta / dtSec).toFixed(0) : 0,
-      });
-    }
-    return result;
-  }, [sorted]);
-
-  const rxData = useMemo(
-    () => netData.map(({ time, "RX (B/s)": rx }) => ({ time, "RX": rx })),
-    [netData]
-  );
-
-  const txData = useMemo(
-    () => netData.map(({ time, "TX (B/s)": tx }) => ({ time, "TX": tx })),
-    [netData]
-  );
-
-  const loadData = useMemo(
-    () =>
-      sorted.map((r) => ({
+    for (let i = 0; i < s.length; i++) {
+      const r = s[i];
+      cpu.push({ time: r.timestamp, "CPU (%)": +r.cpu_usage_percent.toFixed(1) });
+      ram.push({ time: r.timestamp, "RAM (%)": +r.memory_usage_percent.toFixed(1) });
+      load.push({
         time: r.timestamp,
         [t.chart.load1m]: +r.load_1min.toFixed(2),
         [t.chart.load5m]: +r.load_5min.toFixed(2),
         [t.chart.load15m]: +r.load_15min.toFixed(2),
-      })),
-    [sorted, t.chart.load1m, t.chart.load5m, t.chart.load15m]
-  );
+      });
+
+      // Network delta (requires previous row)
+      if (i > 0) {
+        const prev = s[i - 1];
+        const currNet = r.networks;
+        const prevNet = prev.networks;
+        if (currNet && prevNet) {
+          const dtSec = Math.max(
+            (new Date(r.timestamp).getTime() - new Date(prev.timestamp).getTime()) / 1000,
+            1,
+          );
+          const rxDelta = currNet.total_rx_bytes - prevNet.total_rx_bytes;
+          const txDelta = currNet.total_tx_bytes - prevNet.total_tx_bytes;
+          rx.push({ time: r.timestamp, RX: rxDelta >= 0 ? +(rxDelta / dtSec).toFixed(0) : 0 });
+          tx.push({ time: r.timestamp, TX: txDelta >= 0 ? +(txDelta / dtSec).toFixed(0) : 0 });
+        }
+      }
+    }
+
+    return { cpuData: cpu, ramData: ram, rxData: rx, txData: tx, loadData: load, sorted: s };
+  }, [allRows, t.chart.load1m, t.chart.load5m, t.chart.load15m]);
 
   // Latest summary: prefer SSE live data, fall back to last item of sorted array
   const latestFromRows = sorted.length > 0 ? sorted[sorted.length - 1] : null;

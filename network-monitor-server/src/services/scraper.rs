@@ -388,41 +388,39 @@ async fn handle_down(target: &str, display_name: &str, state: &Arc<AppState>) {
             .or_insert_with(|| HostRecord::new(hostname.clone()));
 
         let server_ts = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+
+        // Read last_known_status once (single lock acquisition) and extract all fields
+        let prev_status = state
+            .last_known_status
+            .read()
+            .ok()
+            .and_then(|lks| lks.get(&host_key).cloned());
+
         let offline_status = HostStatusPayload {
             host_key: host_key.clone(),
             display_name: hostname.clone(),
             is_online: false,
             last_seen: server_ts,
-            docker_containers: state
-                .last_known_status
-                .read()
-                .ok()
-                .and_then(|lks| lks.get(&host_key).map(|s| s.docker_containers.clone()))
+            docker_containers: prev_status
+                .as_ref()
+                .map(|s| s.docker_containers.clone())
                 .unwrap_or_default(),
-            ports: state
-                .last_known_status
-                .read()
-                .ok()
-                .and_then(|lks| lks.get(&host_key).map(|s| s.ports.clone()))
+            ports: prev_status
+                .as_ref()
+                .map(|s| s.ports.clone())
                 .unwrap_or_default(),
-            disks: state
-                .last_known_status
-                .read()
-                .ok()
-                .and_then(|lks| lks.get(&host_key).map(|s| s.disks.clone()))
+            disks: prev_status
+                .as_ref()
+                .map(|s| s.disks.clone())
                 .unwrap_or_default(),
             processes: vec![],
-            temperatures: state
-                .last_known_status
-                .read()
-                .ok()
-                .and_then(|lks| lks.get(&host_key).map(|s| s.temperatures.clone()))
+            temperatures: prev_status
+                .as_ref()
+                .map(|s| s.temperatures.clone())
                 .unwrap_or_default(),
-            gpus: state
-                .last_known_status
-                .read()
-                .ok()
-                .and_then(|lks| lks.get(&host_key).map(|s| s.gpus.clone()))
+            gpus: prev_status
+                .as_ref()
+                .map(|s| s.gpus.clone())
                 .unwrap_or_default(),
         };
 

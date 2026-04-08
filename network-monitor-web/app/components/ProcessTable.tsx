@@ -56,16 +56,7 @@ export default function ProcessTable({ processes }: ProcessTableProps) {
           {sorted.map((proc, idx) => (
             <tr
               key={`${proc.pid}-${idx}`}
-              style={{
-                borderBottom: "1px solid var(--bg-card-hover)",
-                transition: "background 0.15s",
-              }}
-              onMouseEnter={(e) => {
-                (e.currentTarget as HTMLElement).style.background = "var(--bg-card-hover)";
-              }}
-              onMouseLeave={(e) => {
-                (e.currentTarget as HTMLElement).style.background = "transparent";
-              }}
+              className="process-row"
             >
               <td
                 style={{

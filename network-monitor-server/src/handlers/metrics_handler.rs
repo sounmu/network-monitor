@@ -66,7 +66,7 @@ pub async fn get_metrics_by_host_key(
                 let cache_key =
                     MetricsQueryCache::make_key(&host_key, start.timestamp(), end.timestamp());
                 if let Some(cached) = state.metrics_query_cache.get(&cache_key) {
-                    cached
+                    Arc::unwrap_or_clone(cached)
                 } else {
                     let result =
                         metrics_repo::fetch_metrics_range(&state.db_pool, &host_key, start, end)
@@ -153,7 +153,7 @@ pub async fn batch_metrics(
                 let cache_key =
                     MetricsQueryCache::make_key(&hk, start.timestamp(), end.timestamp());
                 if let Some(cached) = cache.get(&cache_key) {
-                    cached
+                    Arc::unwrap_or_clone(cached)
                 } else {
                     let result = metrics_repo::fetch_metrics_range(pool, &hk, start, end).await?;
                     cache.insert(cache_key, result.clone());

@@ -1,8 +1,12 @@
 "use client";
 
 import { use } from "react";
+import dynamic from "next/dynamic";
 import { useSSE } from "@/app/lib/sse-context";
-import TimeSeriesChart from "@/app/components/TimeSeriesChart";
+const TimeSeriesChart = dynamic(
+  () => import("@/app/components/TimeSeriesChart"),
+  { ssr: false, loading: () => <div className="skeleton" style={{ height: 300 }} /> },
+);
 import LoadGauge from "@/app/components/LoadGauge";
 import DockerGrid from "@/app/components/DockerGrid";
 import PortList from "@/app/components/PortList";

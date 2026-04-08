@@ -125,9 +125,12 @@ pub async fn delete_host(
         return Err(AppError::NotFound(format!("Host not found: {}", host_key)));
     }
 
-    // Also remove from the last_known_status cache
+    // Clean up in-memory caches for the deleted host
     if let Ok(mut lks) = state.last_known_status.write() {
         lks.remove(&host_key);
+    }
+    if let Ok(mut store) = state.store.write() {
+        store.hosts.remove(&host_key);
     }
 
     tracing::info!(host_key = %host_key, "🗑️ [Hosts] Host deleted");

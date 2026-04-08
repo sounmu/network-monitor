@@ -214,7 +214,7 @@ impl AlertState {
 // ──────────────────────────────────────────────
 
 struct CacheEntry {
-    data: Vec<MetricsRow>,
+    data: Arc<Vec<MetricsRow>>,
     inserted_at: Instant,
 }
 
@@ -244,11 +244,12 @@ impl MetricsQueryCache {
     }
 
     /// Get a cached result if it exists and hasn't expired.
-    pub fn get(&self, key: &str) -> Option<Vec<MetricsRow>> {
+    /// Returns an Arc-wrapped Vec for cheap cloning (atomic ref-count increment only).
+    pub fn get(&self, key: &str) -> Option<Arc<Vec<MetricsRow>>> {
         let entries = self.entries.read().ok()?;
         let entry = entries.get(key)?;
         if entry.inserted_at.elapsed() < self.ttl {
-            Some(entry.data.clone())
+            Some(Arc::clone(&entry.data))
         } else {
             None
         }
@@ -260,7 +261,7 @@ impl MetricsQueryCache {
             entries.insert(
                 key,
                 CacheEntry {
-                    data,
+                    data: Arc::new(data),
                     inserted_at: Instant::now(),
                 },
             );

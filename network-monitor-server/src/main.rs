@@ -57,6 +57,8 @@ async fn main() -> anyhow::Result<()> {
     // ── PostgreSQL connection pool ──
     let db_pool = PgPoolOptions::new()
         .max_connections(max_db_connections)
+        .min_connections(3)
+        .acquire_timeout(std::time::Duration::from_secs(5))
         .connect(&database_url)
         .await
         .context("Failed to connect to PostgreSQL")?;
@@ -132,22 +134,31 @@ async fn main() -> anyhow::Result<()> {
         tracing::warn!(err = ?e, "⚠️ [CA] Failed to update refresh policy");
     }
 
-    // Seed the CA with existing data (covers full retention window).
-    // On first run this materializes up to 90 days; subsequent starts are fast (no-op for
-    // already-materialized ranges).
-    if let Err(e) = sqlx::query(
-        "CALL refresh_continuous_aggregate('metrics_5min', NOW() - INTERVAL '90 days', NOW())",
-    )
-    .execute(&state.db_pool)
-    .await
+    // Seed the CA with existing data in the background (non-blocking startup).
+    // On first run this materializes up to 90 days; subsequent starts are fast.
     {
-        tracing::warn!(err = ?e, "⚠️ [CA] Failed to seed metrics_5min (may not exist yet)");
-    } else {
-        tracing::info!("📊 [CA] metrics_5min refreshed (90-day window)");
+        let ca_pool = state.db_pool.clone();
+        tokio::spawn(async move {
+            if let Err(e) = sqlx::query(
+                "CALL refresh_continuous_aggregate('metrics_5min', NOW() - INTERVAL '90 days', NOW())",
+            )
+            .execute(&ca_pool)
+            .await
+            {
+                tracing::warn!(err = ?e, "⚠️ [CA] Failed to seed metrics_5min (may not exist yet)");
+            } else {
+                tracing::info!("📊 [CA] metrics_5min refreshed (90-day window)");
+            }
+        });
     }
 
-    // ── Pre-populate last_known_status cache from DB ──
-    match repositories::hosts_repo::list_hosts(&state.db_pool).await {
+    // ── Pre-populate caches from DB (parallel) ──
+    let (hosts_result, password_result) = tokio::join!(
+        repositories::hosts_repo::list_hosts(&state.db_pool),
+        repositories::users_repo::load_password_changed_at(&state.db_pool),
+    );
+
+    match hosts_result {
         Ok(hosts) => {
             tracing::info!(count = hosts.len(), "📋 [Hosts] Loaded from DB");
             state.pre_populate_status(&hosts);
@@ -155,8 +166,7 @@ async fn main() -> anyhow::Result<()> {
         Err(e) => tracing::warn!(err = ?e, "⚠️ [Hosts] Failed to load initial hosts"),
     }
 
-    // ── Pre-populate password_changed_at cache for token revocation ──
-    match repositories::users_repo::load_password_changed_at(&state.db_pool).await {
+    match password_result {
         Ok(map) => {
             if let Ok(mut cache) = state.password_changed_at.write() {
                 *cache = map;

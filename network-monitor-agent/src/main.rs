@@ -19,7 +19,7 @@ use futures_util::StreamExt;
 use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::net::TcpStream;
+
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use sysinfo::{Components, Disks, Networks, System};
@@ -648,18 +648,17 @@ async fn read_docker_cache(
 
 #[tracing::instrument]
 async fn collect_ports(ports: Vec<u16>) -> Vec<PortStatus> {
-    tokio::task::spawn_blocking(move || {
-        ports
-            .into_iter()
-            .map(|port| {
-                let addr: std::net::SocketAddr = format!("127.0.0.1:{}", port).parse().unwrap();
-                let is_open = TcpStream::connect_timeout(&addr, Duration::from_millis(100)).is_ok();
-                PortStatus { port, is_open }
-            })
-            .collect()
-    })
-    .await
-    .expect("spawn_blocking panicked in collect_ports")
+    let futs = ports.into_iter().map(|port| async move {
+        let addr: std::net::SocketAddr = format!("127.0.0.1:{}", port).parse().unwrap();
+        let is_open = tokio::time::timeout(
+            Duration::from_millis(100),
+            tokio::net::TcpStream::connect(addr),
+        )
+        .await
+        .is_ok_and(|r| r.is_ok());
+        PortStatus { port, is_open }
+    });
+    futures_util::future::join_all(futs).await
 }
 
 // ──────────────────────────────────────────────

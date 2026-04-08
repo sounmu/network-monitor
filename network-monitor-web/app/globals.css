@@ -483,6 +483,15 @@ body {
   font-weight: 600;
 }
 
+/* Process table row hover */
+.process-row {
+  border-bottom: 1px solid var(--bg-card-hover);
+  transition: background 0.15s ease;
+}
+.process-row:hover {
+  background: var(--bg-card-hover);
+}
+
 /* Sidebar host item hover */
 .sidebar-host-item {
   transition: background 0.15s ease;

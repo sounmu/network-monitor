@@ -2,8 +2,10 @@
 
 import React, {
   createContext,
+  useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -22,12 +24,21 @@ interface SSEContextValue {
   statusMap: Record<string, HostStatusPayload>;
   /** EventSource connection state */
   isConnected: boolean;
+  /** Pre-computed host list derived from statusMap */
+  hostList: HostStatusPayload[];
+  /** Number of online hosts */
+  onlineCount: number;
+  /** Number of offline hosts */
+  offlineCount: number;
 }
 
 const SSEContext = createContext<SSEContextValue>({
   metricsMap: {},
   statusMap: {},
   isConnected: false,
+  hostList: [],
+  onlineCount: 0,
+  offlineCount: 0,
 });
 
 // ──────────────────────────────────────────
@@ -51,6 +62,52 @@ export function SSEProvider({ children }: { children: React.ReactNode }) {
   >({});
   const [isConnected, setIsConnected] = useState(false);
   const esRef = useRef<EventSource | null>(null);
+
+  // ── Batched SSE update buffers ──
+  // Accumulate SSE events in refs, then flush once per animation frame.
+  // With 100 hosts this reduces 100+ setState calls per scrape cycle to 1.
+  const metricsBufRef = useRef<Record<string, HostMetricsPayload>>({});
+  const statusBufRef = useRef<Record<string, HostStatusPayload>>({});
+  const offlineKeysBufRef = useRef<Set<string>>(new Set());
+  const rafRef = useRef<number | null>(null);
+
+  const flushBuffers = useCallback(() => {
+    rafRef.current = null;
+
+    const metricsBuf = metricsBufRef.current;
+    const statusBuf = statusBufRef.current;
+    const offlineKeys = offlineKeysBufRef.current;
+
+    const hasMetrics = Object.keys(metricsBuf).length > 0;
+    const hasStatus = Object.keys(statusBuf).length > 0;
+    const hasOffline = offlineKeys.size > 0;
+
+    if (hasMetrics || hasOffline) {
+      setMetricsMap((prev) => {
+        const next = hasMetrics ? { ...prev, ...metricsBuf } : { ...prev };
+        if (hasOffline) {
+          for (const key of offlineKeys) {
+            delete next[key];
+          }
+        }
+        return next;
+      });
+    }
+
+    if (hasStatus) {
+      setStatusMap((prev) => ({ ...prev, ...statusBuf }));
+    }
+
+    metricsBufRef.current = {};
+    statusBufRef.current = {};
+    offlineKeysBufRef.current = new Set();
+  }, []);
+
+  const scheduleFlush = useCallback(() => {
+    if (rafRef.current === null) {
+      rafRef.current = requestAnimationFrame(flushBuffers);
+    }
+  }, [flushBuffers]);
 
   useEffect(() => {
     // Only connect when authenticated
@@ -97,32 +154,27 @@ export function SSEProvider({ children }: { children: React.ReactNode }) {
       };
 
       // event: metrics — dynamic data (CPU, memory, network speed)
-      // Use host_key as map key to prevent display_name collisions
+      // Buffered: accumulated in ref, flushed once per animation frame
       es.addEventListener("metrics", (e: MessageEvent) => {
         try {
           const payload: HostMetricsPayload = JSON.parse(e.data);
-          setMetricsMap((prev) => ({ ...prev, [payload.host_key]: payload }));
+          metricsBufRef.current[payload.host_key] = payload;
+          scheduleFlush();
         } catch {
-          // Ignore parse errors (defense against server bugs)
+          // Ignore parse errors
         }
       });
 
       // event: status — static data (Docker, port status)
-      // When an offline event (is_online: false) is received, remove the key from metricsMap
-      // to prevent stale data residue (last CPU/RAM values lingering for offline hosts)
+      // Buffered: accumulated in ref, flushed once per animation frame
       es.addEventListener("status", (e: MessageEvent) => {
         try {
           const payload: HostStatusPayload = JSON.parse(e.data);
-          setStatusMap((prev) => ({ ...prev, [payload.host_key]: payload }));
-
-          // Remove stale metrics data on offline transition
+          statusBufRef.current[payload.host_key] = payload;
           if (!payload.is_online) {
-            setMetricsMap((prev) => {
-              const next = { ...prev };
-              delete next[payload.host_key];
-              return next;
-            });
+            offlineKeysBufRef.current.add(payload.host_key);
           }
+          scheduleFlush();
         } catch {
           // Ignore parse errors
         }
@@ -135,15 +187,30 @@ export function SSEProvider({ children }: { children: React.ReactNode }) {
     return () => {
       unmounted = true;
       if (retryTimer) clearTimeout(retryTimer);
+      if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
       if (esRef.current) {
         esRef.current.close();
         esRef.current = null;
       }
     };
-  }, [user]); // Reconnect when auth state changes
+  }, [user, scheduleFlush]); // Reconnect when auth state changes
+
+  // ── Pre-computed derived state (avoids duplicate O(n) in page + sidebar) ──
+  const { hostList, onlineCount, offlineCount } = useMemo(() => {
+    const list = Object.values(statusMap);
+    let online = 0;
+    let offline = 0;
+    for (const h of list) {
+      if (h.is_online) online++;
+      else offline++;
+    }
+    return { hostList: list, onlineCount: online, offlineCount: offline };
+  }, [statusMap]);
 
   return (
-    <SSEContext.Provider value={{ metricsMap, statusMap, isConnected }}>
+    <SSEContext.Provider
+      value={{ metricsMap, statusMap, isConnected, hostList, onlineCount, offlineCount }}
+    >
       {children}
     </SSEContext.Provider>
   );

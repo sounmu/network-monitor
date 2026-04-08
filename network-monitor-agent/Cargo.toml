@@ -26,7 +26,7 @@ sysinfo = "0.34"
 nvml-wrapper = { version = "0.10", optional = true }
 macmon = { version = "0.7", optional = true }
 futures-util = "0.3"
-tokio = { version = "1.0", features = ["full"] }
+tokio = { version = "1.0", features = ["rt-multi-thread", "sync", "time", "net", "signal", "macros"] }
 tracing = { version = "0.1.44", features = ["attributes"] }
 tracing-appender = "0.2.4"
 tracing-subscriber = { version = "0.3.23", features = ["ansi", "env-filter", "fmt", "json", "registry"] }
