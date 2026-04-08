@@ -491,6 +491,11 @@ body {
   background: var(--bg-card-hover);
 }
 
+/* Calendar day button hover */
+.calendar-day:not(.calendar-day-selected):hover {
+  background: var(--bg-card-hover);
+}
+
 /* Sidebar host item hover */
 .sidebar-host-item {
   transition: background 0.15s ease;

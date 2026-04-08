@@ -256,16 +256,7 @@ export default function DateTimePicker({ value, onChange }: DateTimePickerProps)
                     cursor: "pointer",
                     transition: "all 0.1s ease",
                   }}
-                  onMouseEnter={(e) => {
-                    if (!isSelected) {
-                      (e.target as HTMLElement).style.background = "var(--bg-card-hover)";
-                    }
-                  }}
-                  onMouseLeave={(e) => {
-                    if (!isSelected) {
-                      (e.target as HTMLElement).style.background = "transparent";
-                    }
-                  }}
+                  className={`calendar-day${isSelected ? " calendar-day-selected" : ""}`}
                 >
                   {day}
                 </button>
