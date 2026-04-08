@@ -619,15 +619,24 @@ async fn read_docker_cache(
 
     match target_containers {
         Some(targets) => {
-            let mut result: Vec<DockerContainer> = containers
-                .iter()
-                .filter(|c| targets.iter().any(|t| c.image.contains(t)))
-                .cloned()
-                .collect();
+            // Track which targets have been matched using a HashSet — O(n+m) instead of O(n×m)
+            let mut matched: std::collections::HashSet<&str> =
+                std::collections::HashSet::with_capacity(targets.len());
+            let mut result: Vec<DockerContainer> = Vec::new();
 
-            // If a target image is not in the cache, add a placeholder with "Missing" state.
+            for c in containers.iter() {
+                for t in &targets {
+                    if c.image.contains(t.as_str()) {
+                        matched.insert(t.as_str());
+                        result.push(c.clone());
+                        break;
+                    }
+                }
+            }
+
+            // Add placeholders for unmatched targets
             for t in &targets {
-                if !result.iter().any(|c| c.image.contains(t)) {
+                if !matched.contains(t.as_str()) {
                     result.push(DockerContainer {
                         container_name: format!("Missing ({})", t),
                         image: t.clone(),
@@ -638,6 +647,8 @@ async fn read_docker_cache(
             }
             result
         }
+        // Clone the cached Vec only once, outside the lock scope isn't possible
+        // here since we hold a read guard, but at least it's a single clone.
         None => containers.clone(),
     }
 }
@@ -649,7 +660,7 @@ async fn read_docker_cache(
 #[tracing::instrument]
 async fn collect_ports(ports: Vec<u16>) -> Vec<PortStatus> {
     let futs = ports.into_iter().map(|port| async move {
-        let addr: std::net::SocketAddr = format!("127.0.0.1:{}", port).parse().unwrap();
+        let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
         let is_open = tokio::time::timeout(
             Duration::from_millis(100),
             tokio::net::TcpStream::connect(addr),
