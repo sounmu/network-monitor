@@ -12,7 +12,7 @@ import {
 import { Server, Wifi, WifiOff, AlertTriangle, Activity, Clock, ArrowRight } from "lucide-react";
 import DashboardWidgets from "@/app/components/DashboardWidgets";
 import { useRouter } from "next/navigation";
-import React from "react";
+import React, { useMemo } from "react";
 import { useI18n } from "@/app/i18n/I18nContext";
 
 export default function HomePage() {
@@ -20,23 +20,31 @@ export default function HomePage() {
   const { metricsMap, statusMap, isConnected } = useSSE();
   const { t } = useI18n();
 
-  // Build host list from statusMap
+  // Build host list from statusMap (memoized to avoid O(n) recalc on unrelated re-renders)
   // statusMap is pre-populated on server start, so offline hosts are always included
-  const hosts = Object.values(statusMap).map((status) => {
-    const metrics = metricsMap[status.host_key];
-    return {
-      host_key: status.host_key,
-      display_name: metrics?.display_name ?? status.display_name,
-      is_online: metrics?.is_online ?? status.is_online ?? false,
-      last_seen: metrics?.timestamp ?? status.last_seen ?? null,
-    };
-  });
+  const { hosts, onlineCount, pendingCount, offlineCount } = useMemo(() => {
+    const list = Object.values(statusMap).map((status) => {
+      const metrics = metricsMap[status.host_key];
+      return {
+        host_key: status.host_key,
+        display_name: metrics?.display_name ?? status.display_name,
+        is_online: metrics?.is_online ?? status.is_online ?? false,
+        last_seen: metrics?.timestamp ?? status.last_seen ?? null,
+      };
+    });
+    let online = 0;
+    let pending = 0;
+    let offline = 0;
+    for (const h of list) {
+      const s = getHostStatus(h.last_seen, h.is_online);
+      if (s === "online") online++;
+      else if (s === "pending") pending++;
+      else offline++;
+    }
+    return { hosts: list, onlineCount: online, pendingCount: pending, offlineCount: offline };
+  }, [statusMap, metricsMap]);
 
   const isLoading = !isConnected && hosts.length === 0;
-  const statusList = hosts.map((h) => getHostStatus(h.last_seen, h.is_online));
-  const onlineCount = statusList.filter((s) => s === "online").length;
-  const pendingCount = statusList.filter((s) => s === "pending").length;
-  const offlineCount = statusList.filter((s) => s === "offline").length;
 
   return (
     <div className="page-content fade-in">

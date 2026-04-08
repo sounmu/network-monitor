@@ -1,6 +1,7 @@
 "use client";
 
 import { usePathname, useRouter } from "next/navigation";
+import { useMemo } from "react";
 import { Activity, Server, WifiOff, AlertTriangle, LayoutDashboard, Radio, Settings, Bell, Sun, Moon, Shield, Globe, LogOut } from "lucide-react";
 import { useSSE } from "@/app/lib/sse-context";
 import {
@@ -21,21 +22,28 @@ export default function Sidebar() {
   const { theme, toggleTheme } = useTheme();
   const { user, logout } = useAuth();
 
-  // Build host list from statusMap — offline hosts are always visible
-  const hosts = Object.values(statusMap).map((status) => {
-    const metrics = metricsMap[status.host_key];
-    return {
-      host_key: status.host_key,
-      display_name: metrics?.display_name ?? status.display_name,
-      is_online: metrics?.is_online ?? status.is_online ?? false,
-      last_seen: metrics?.timestamp ?? status.last_seen ?? null,
-    };
-  });
-
-  const statusList = hosts.map((h) => getHostStatus(h.last_seen, h.is_online));
-  const onlineCount = statusList.filter((s) => s === "online").length;
-  const pendingCount = statusList.filter((s) => s === "pending").length;
-  const offlineCount = statusList.filter((s) => s === "offline").length;
+  // Build host list from statusMap — offline hosts are always visible (memoized)
+  const { hosts, onlineCount, pendingCount, offlineCount } = useMemo(() => {
+    const list = Object.values(statusMap).map((status) => {
+      const metrics = metricsMap[status.host_key];
+      return {
+        host_key: status.host_key,
+        display_name: metrics?.display_name ?? status.display_name,
+        is_online: metrics?.is_online ?? status.is_online ?? false,
+        last_seen: metrics?.timestamp ?? status.last_seen ?? null,
+      };
+    });
+    let online = 0;
+    let pending = 0;
+    let offline = 0;
+    for (const h of list) {
+      const s = getHostStatus(h.last_seen, h.is_online);
+      if (s === "online") online++;
+      else if (s === "pending") pending++;
+      else offline++;
+    }
+    return { hosts: list, onlineCount: online, pendingCount: pending, offlineCount: offline };
+  }, [statusMap, metricsMap]);
 
   return (
     <aside
