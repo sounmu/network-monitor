@@ -84,11 +84,16 @@ export function SSEProvider({ children }: { children: React.ReactNode }) {
 
     if (hasMetrics || hasOffline) {
       setMetricsMap((prev) => {
+        // Only remove offline keys that actually exist in the map — avoids
+        // creating a new object reference when there's nothing to change.
+        const keysToRemove = hasOffline
+          ? [...offlineKeys].filter((k) => k in prev)
+          : [];
+        if (!hasMetrics && keysToRemove.length === 0) return prev;
+
         const next = hasMetrics ? { ...prev, ...metricsBuf } : { ...prev };
-        if (hasOffline) {
-          for (const key of offlineKeys) {
-            delete next[key];
-          }
+        for (const key of keysToRemove) {
+          delete next[key];
         }
         return next;
       });

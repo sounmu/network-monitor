@@ -13,8 +13,9 @@ use crate::models::sse_payloads::{HostMetricsPayload, HostStatusPayload, Network
 
 /// How long to retain in-memory metric history (10 minutes)
 const HISTORY_RETENTION_SECS: u64 = 10 * 60;
-/// Minimum interval between periodic forced status SSE broadcasts (2 minutes)
-const STATUS_PERIODIC_INTERVAL_SECS: u64 = 120;
+/// Minimum interval between periodic forced status SSE broadcasts (2 minutes).
+/// Used by both `process_metrics` (online path) and `handle_down` (offline path).
+pub const STATUS_PERIODIC_INTERVAL_SECS: u64 = 120;
 
 /// Type-safe alert result enum.
 /// Uses pattern matching instead of string matching for state transitions,

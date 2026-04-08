@@ -10,7 +10,8 @@ use crate::models::agent_metrics::AgentMetrics;
 use crate::models::app_state::{AlertConfig, AppState, HostRecord};
 use crate::models::sse_payloads::{HostStatusPayload, SseBroadcast};
 use crate::repositories::{alert_configs_repo, hosts_repo, metrics_repo};
-use crate::services::{alert_service, metrics_service};
+use crate::services::alert_service;
+use crate::services::metrics_service::{self, STATUS_PERIODIC_INTERVAL_SECS};
 
 /// Result of a single host scrape — carries data needed for batch DB persistence.
 enum ScrapeOutcome {
@@ -370,7 +371,8 @@ async fn handle_down(target: &str, display_name: &str, state: &Arc<AppState>) {
     // DB persistence is deferred — the caller (scrape_all) collects offline hosts
     // and batch-inserts them in a single query per scrape cycle.
 
-    let alert_msg = {
+    // ── Phase 1: store write lock (lightweight — alert state only) ──
+    let (alert_msg, hostname, should_broadcast) = {
         let mut store = match state.store.write() {
             Ok(s) => s,
             Err(_) => return,
@@ -387,49 +389,16 @@ async fn handle_down(target: &str, display_name: &str, state: &Arc<AppState>) {
             .entry(target.to_string())
             .or_insert_with(|| HostRecord::new(hostname.clone()));
 
-        let server_ts = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
-
-        // Read last_known_status once (single lock acquisition) and extract all fields
-        let prev_status = state
-            .last_known_status
-            .read()
-            .ok()
-            .and_then(|lks| lks.get(&host_key).cloned());
-
-        let offline_status = HostStatusPayload {
-            host_key: host_key.clone(),
-            display_name: hostname.clone(),
-            is_online: false,
-            last_seen: server_ts,
-            docker_containers: prev_status
-                .as_ref()
-                .map(|s| s.docker_containers.clone())
-                .unwrap_or_default(),
-            ports: prev_status
-                .as_ref()
-                .map(|s| s.ports.clone())
-                .unwrap_or_default(),
-            disks: prev_status
-                .as_ref()
-                .map(|s| s.disks.clone())
-                .unwrap_or_default(),
-            processes: vec![],
-            temperatures: prev_status
-                .as_ref()
-                .map(|s| s.temperatures.clone())
-                .unwrap_or_default(),
-            gpus: prev_status
-                .as_ref()
-                .map(|s| s.gpus.clone())
-                .unwrap_or_default(),
-        };
-
-        if let Ok(mut lks) = state.last_known_status.write() {
-            lks.insert(host_key.clone(), offline_status.clone());
+        // Throttle status broadcasts for offline hosts — same pattern as handle_success().
+        // Without this, N offline hosts generate N unnecessary SSE events every scrape cycle.
+        let periodic_elapsed = record
+            .last_status_sent
+            .is_none_or(|t| t.elapsed() >= Duration::from_secs(STATUS_PERIODIC_INTERVAL_SECS));
+        if periodic_elapsed {
+            record.last_status_sent = Some(now);
         }
-        let _ = state.sse_tx.send(SseBroadcast::Status(offline_status));
 
-        if record.alert_state.offline_alerted {
+        let alert = if record.alert_state.offline_alerted {
             None
         } else {
             let last_recovery = record.alert_state.last_recovery_alert;
@@ -446,9 +415,44 @@ async fn handle_down(target: &str, display_name: &str, state: &Arc<AppState>) {
             } else {
                 None
             }
-        }
+        };
+
+        // Broadcast on first offline (alert fired) or periodic interval
+        let should_broadcast = alert.is_some() || periodic_elapsed;
+
+        (alert, hostname, should_broadcast)
+        // ← store write lock released here
     };
 
+    // ── Phase 2: last_known_status update + SSE broadcast (no store lock held) ──
+    if should_broadcast {
+        let server_ts = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+
+        if let Ok(mut lks) = state.last_known_status.write() {
+            let status = lks
+                .entry(host_key.clone())
+                .or_insert_with(|| HostStatusPayload {
+                    host_key: host_key.clone(),
+                    display_name: hostname.clone(),
+                    is_online: false,
+                    last_seen: String::new(),
+                    docker_containers: vec![],
+                    ports: vec![],
+                    disks: vec![],
+                    processes: vec![],
+                    temperatures: vec![],
+                    gpus: vec![],
+                });
+            // Update only the fields that change — reuse existing Vec data (no clone)
+            status.is_online = false;
+            status.last_seen = server_ts;
+            status.processes = vec![];
+
+            let _ = state.sse_tx.send(SseBroadcast::Status(status.clone()));
+        }
+    }
+
+    // ── Phase 3: alert delivery (async I/O, no locks held) ──
     if let Some(msg) = alert_msg {
         alert_service::send_alert(&state.http_client, &state.db_pool, &msg).await;
         let _ = crate::repositories::alert_history_repo::insert_alert(

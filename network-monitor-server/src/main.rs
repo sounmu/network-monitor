@@ -73,10 +73,19 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("✅ [DB] Migrations applied successfully.");
 
     // ── SSE broadcast channel ──
-    let sse_buffer: usize = std::env::var("SSE_BUFFER_SIZE")
-        .unwrap_or_else(|_| "128".to_string())
-        .parse()
-        .unwrap_or(128);
+    // Size the buffer to hold at least one full scrape cycle (N hosts × 2 events each)
+    // so slow consumers don't get Lagged errors under normal load.
+    let host_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM hosts")
+        .fetch_one(&db_pool)
+        .await
+        .unwrap_or(0);
+    let env_buffer: usize = std::env::var("SSE_BUFFER_SIZE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    let auto_buffer = (host_count as usize) * 3;
+    let sse_buffer = env_buffer.max(auto_buffer).max(128);
+    tracing::info!(sse_buffer, host_count, "📡 [SSE] Broadcast channel sized");
     let (sse_tx, _) = tokio::sync::broadcast::channel(sse_buffer);
 
     // ── Shared application state ──
