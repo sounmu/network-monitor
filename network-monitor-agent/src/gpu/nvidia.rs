@@ -1,4 +1,4 @@
-use crate::GpuInfo;
+use crate::models::GpuInfo;
 
 /// Collect NVIDIA GPU metrics via NVML. Returns empty vec if no NVIDIA GPU or driver is available.
 pub fn collect() -> Vec<GpuInfo> {

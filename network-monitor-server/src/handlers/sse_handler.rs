@@ -10,27 +10,32 @@ use tokio_stream::wrappers::BroadcastStream;
 
 use crate::models::app_state::AppState;
 use crate::models::sse_payloads::SseBroadcast;
-use crate::services::auth;
 
 #[derive(Deserialize)]
 pub struct SseQuery {
-    /// EventSource cannot set custom headers, so the JWT is received as a query parameter.
+    /// Single-use opaque ticket issued by `POST /api/auth/sse-ticket`.
+    /// Browsers cannot set custom headers on `EventSource`, so the token is
+    /// passed here — but it is **not** the long-lived JWT. See
+    /// `services::sse_ticket` for the full rationale.
     pub key: Option<String>,
 }
 
 /// GET /api/stream — SSE stream endpoint
 ///
 /// Flow:
-/// 1. Validate the API key from the `?key=` query parameter.
+/// 1. Atomically consume the single-use ticket from the `?key=` query parameter.
 /// 2. Immediately send the current status payload for all known hosts (initial state sync).
 /// 3. Subscribe to the broadcast channel and stream subsequent metrics/status events in real time.
 pub async fn sse_handler(
     Query(params): Query<SseQuery>,
     State(state): State<Arc<AppState>>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, StatusCode> {
-    if !auth::check_jwt_query(params.key.as_deref().unwrap_or("")) {
-        return Err(StatusCode::UNAUTHORIZED);
-    }
+    // Consume the single-use ticket. A missing, unknown, expired, or
+    // already-consumed ticket is indistinguishable from the client's side.
+    let _user_id = state
+        .sse_ticket_store
+        .consume(params.key.as_deref().unwrap_or(""))
+        .ok_or(StatusCode::UNAUTHORIZED)?;
 
     // ── Collect initial status snapshot ──
     // When a new client connects, immediately send the current state for all known hosts.

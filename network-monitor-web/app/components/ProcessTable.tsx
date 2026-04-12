@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo } from "react";
 import { Cpu } from "lucide-react";
 import { ProcessInfo } from "@/app/types/metrics";
 import { useI18n } from "@/app/i18n/I18nContext";
@@ -11,6 +12,11 @@ interface ProcessTableProps {
 export default function ProcessTable({ processes }: ProcessTableProps) {
   const { t } = useI18n();
 
+  const sorted = useMemo(
+    () => processes ? [...processes].sort((a, b) => b.cpu_usage - a.cpu_usage) : [],
+    [processes]
+  );
+
   if (!processes || processes.length === 0) {
     return (
       <div style={{ textAlign: "center", padding: "24px 0", color: "var(--text-muted)" }}>
@@ -19,8 +25,6 @@ export default function ProcessTable({ processes }: ProcessTableProps) {
       </div>
     );
   }
-
-  const sorted = [...processes].sort((a, b) => b.cpu_usage - a.cpu_usage);
 
   return (
     <div style={{ overflowX: "auto" }}>

@@ -10,7 +10,7 @@ import React, {
   useState,
 } from "react";
 import { HostMetricsPayload, HostStatusPayload } from "@/app/types/metrics";
-import { getUserToken } from "@/app/lib/api";
+import { issueSseTicket } from "@/app/lib/api";
 import { useAuth } from "@/app/auth/AuthContext";
 
 // ──────────────────────────────────────────
@@ -122,7 +122,11 @@ export function SSEProvider({ children }: { children: React.ReactNode }) {
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     let unmounted = false;
 
-    function connect() {
+    // Ticket-first reconnection: a fresh single-use SSE ticket is issued on
+    // every (re)connect. Tickets are atomic/one-shot, so re-using the previous
+    // one on EventSource's internal retry would always fail — we must loop
+    // through our own handler.
+    async function connect() {
       if (unmounted) return;
 
       // Clean up existing connection if any
@@ -131,11 +135,31 @@ export function SSEProvider({ children }: { children: React.ReactNode }) {
         esRef.current = null;
       }
 
+      let ticket: string;
+      try {
+        const res = await issueSseTicket();
+        ticket = res.ticket;
+      } catch {
+        // `apiCall` already redirects to /login on 401 (stale / rotated JWT).
+        // Any other failure — network flap, server restarting — is transient
+        // and gets the same exponential backoff as a dropped SSE stream.
+        if (unmounted) return;
+        setIsConnected(false);
+        const delay = retryMs;
+        retryMs = Math.min(retryMs * 2, MAX_RETRY_MS);
+        retryTimer = setTimeout(() => {
+          void connect();
+        }, delay);
+        return;
+      }
+
+      if (unmounted) return;
+
       const apiBase =
-        process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:3000";
-      const token = getUserToken();
-      const params = token ? `?key=${encodeURIComponent(token)}` : "";
-      const url = `${apiBase}/api/stream${params}`;
+        process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3000";
+      // The ticket is opaque, short-lived, and single-use — safe to carry as
+      // a query parameter. Never put the long-lived JWT on the URL.
+      const url = `${apiBase}/api/stream?key=${encodeURIComponent(ticket)}`;
 
       const es = new EventSource(url);
       esRef.current = es;
@@ -150,11 +174,13 @@ export function SSEProvider({ children }: { children: React.ReactNode }) {
         es.close();
         esRef.current = null;
 
-        // Exponential backoff reconnection
+        // Exponential backoff reconnection — each attempt mints a new ticket.
         if (!unmounted) {
           const delay = retryMs;
           retryMs = Math.min(retryMs * 2, MAX_RETRY_MS);
-          retryTimer = setTimeout(connect, delay);
+          retryTimer = setTimeout(() => {
+            void connect();
+          }, delay);
         }
       };
 
@@ -186,7 +212,7 @@ export function SSEProvider({ children }: { children: React.ReactNode }) {
       });
     }
 
-    connect();
+    void connect();
 
     // Must close on component unmount — prevent memory leaks
     return () => {

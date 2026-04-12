@@ -10,7 +10,15 @@ import {
   type ReactNode,
 } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { UserInfo, setUserToken, getUserToken, getMe } from "@/app/lib/api";
+import {
+  UserInfo,
+  setAccessToken,
+  getAccessToken,
+  clearLegacyStorage,
+  serverLogout,
+  tryRefreshSession,
+  getMe,
+} from "@/app/lib/api";
 
 interface AuthContextValue {
   user: UserInfo | null;
@@ -31,26 +39,40 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
 
+  // On mount: attempt session restoration. Priority order:
+  //   1. In-memory access token (tab-reuse — already present if we didn't
+  //      unload). Validate it with /api/auth/me.
+  //   2. httpOnly refresh cookie (page reload / new tab). Call
+  //      /api/auth/refresh to mint a fresh access token.
+  //   3. Neither → unauthenticated.
   useEffect(() => {
     let cancelled = false;
-    const token = getUserToken();
-    if (token) {
-      getMe()
-        .then((u) => {
+    clearLegacyStorage();
+
+    const init = async () => {
+      // Path 1: memory token exists — validate server-side.
+      if (getAccessToken()) {
+        try {
+          const u = await getMe();
           if (!cancelled) setUser(u);
-        })
-        .catch(() => {
-          setUserToken(null);
-        })
-        .finally(() => {
-          if (!cancelled) setIsLoading(false);
-        });
-    } else {
-      // No token — use microtask to avoid synchronous setState in effect body
-      queueMicrotask(() => {
+        } catch {
+          setAccessToken(null);
+        }
         if (!cancelled) setIsLoading(false);
-      });
-    }
+        return;
+      }
+
+      // Path 2: no memory token — try to refresh via httpOnly cookie.
+      const result = await tryRefreshSession();
+      if (!cancelled) {
+        if (result) {
+          setUser(result.user);
+        }
+        setIsLoading(false);
+      }
+    };
+
+    void init();
     return () => { cancelled = true; };
   }, []);
 
@@ -66,14 +88,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [isLoading, user, pathname, router]);
 
   const login = useCallback((token: string, userInfo: UserInfo) => {
-    setUserToken(token);
+    setAccessToken(token);
     setUser(userInfo);
   }, []);
 
   const logout = useCallback(() => {
-    setUserToken(null);
-    setUser(null);
-    router.replace("/login");
+    // Fire-and-forget server revoke so the token + refresh cookie are
+    // killed on the backend. `serverLogout` never throws.
+    void serverLogout().finally(() => {
+      setAccessToken(null);
+      setUser(null);
+      router.replace("/login");
+    });
   }, [router]);
 
   const value = useMemo(
@@ -82,6 +108,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   if (isLoading) {
+    return null;
+  }
+
+  // Don't render protected children when unauthenticated. Without this
+  // guard, SWR hooks in the child tree mount for a single frame before
+  // the redirect useEffect fires, fire unauthenticated fetches that
+  // return 401, trigger handleUnauthorized → hard reload, and loop.
+  const isPublic = PUBLIC_PATHS.some(
+    (p) => pathname === p || pathname.startsWith(p + "/"),
+  );
+  if (!user && !isPublic) {
     return null;
   }
 

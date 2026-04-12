@@ -3,7 +3,7 @@ mod apple;
 #[cfg(feature = "gpu-nvidia")]
 mod nvidia;
 
-use crate::GpuInfo;
+use crate::models::GpuInfo;
 
 /// Collect GPU metrics from all enabled backends.
 /// Returns empty vec when no GPU or no supported backend is available.

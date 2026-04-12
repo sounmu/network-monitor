@@ -41,11 +41,12 @@ pub fn get_log_dir() -> PathBuf {
             );
             std::process::exit(1);
         }
-        panic!(
-            "Failed to create log directory '{}': {}",
+        eprintln!(
+            "[WARN] Failed to create log directory '{}': {} — logs will go to stdout only",
             log_dir.display(),
             e
         );
+        return log_dir;
     }
 
     log_dir

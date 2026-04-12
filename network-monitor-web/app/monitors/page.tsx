@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import useSWR from "swr";
 import { Globe, Wifi, Plus, Trash2, CheckCircle, XCircle } from "lucide-react";
 import {
@@ -89,7 +89,10 @@ function HttpMonitorsTab() {
   const [formInterval, setFormInterval] = useState(60);
   const [formTimeout, setFormTimeout] = useState(10000);
 
-  const summaryMap = new Map(summaries?.map((s) => [s.monitor_id, s]));
+  const summaryMap = useMemo(
+    () => new Map(summaries?.map((s) => [s.monitor_id, s])),
+    [summaries]
+  );
 
   const handleCreate = async () => {
     if (!formName.trim() || !formUrl.trim()) return;
@@ -251,7 +254,10 @@ function PingMonitorsTab() {
   const [formName, setFormName] = useState("");
   const [formHost, setFormHost] = useState("");
 
-  const summaryMap = new Map(summaries?.map((s) => [s.monitor_id, s]));
+  const summaryMap = useMemo(
+    () => new Map(summaries?.map((s) => [s.monitor_id, s])),
+    [summaries]
+  );
 
   const handleCreate = async () => {
     if (!formName.trim() || !formHost.trim()) return;

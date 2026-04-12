@@ -1,71 +1,157 @@
 import { MetricsRow, HostsApiResponse } from "@/app/types/metrics";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:3000";
+// Default to localhost (not 127.0.0.1) so the browser treats the frontend
+// (localhost:3001) and API (localhost:3000) as same-site. This is required
+// for SameSite=Strict cookies to be sent on fetch requests.
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
 
-// User auth token management
-let userToken: string | null = null;
+// ── Access token (memory-only) ──────────────────────────────────────────
+// The short-lived access JWT lives only in a module-level variable and the
+// React context. It is never written to localStorage. On page reload, the
+// init flow calls /api/auth/refresh (which reads the httpOnly cookie) and
+// receives a fresh token.
 
-export function setUserToken(token: string | null) {
-  userToken = token;
+let accessToken: string | null = null;
+
+export function setAccessToken(token: string | null) {
+  accessToken = token;
+}
+
+export function getAccessToken(): string | null {
+  return accessToken;
+}
+
+/** @deprecated — only exists to remove stale keys from older versions. */
+export function clearLegacyStorage() {
   if (typeof window !== "undefined") {
-    if (token) localStorage.setItem("auth_token", token);
-    else localStorage.removeItem("auth_token");
+    localStorage.removeItem("auth_token");
   }
 }
 
-export function getUserToken(): string | null {
-  if (userToken) return userToken;
-  if (typeof window !== "undefined") {
-    userToken = localStorage.getItem("auth_token");
+// ── Backward-compat aliases used by AuthContext during the migration ──
+// These will be removed once all callsites switch to the new names.
+export const setUserToken = setAccessToken;
+export const getUserToken = getAccessToken;
+
+// ── Singleflight refresh ────────────────────────────────────────────────
+// A single POST /api/auth/refresh is shared across every caller:
+//   * AuthContext.init on page reload (tryRefreshSession)
+//   * 401 retry in fetcher/apiCall (silentRefresh)
+//   * React 18 StrictMode double-effect (same mount cycle fires twice)
+// Without this, two concurrent requests present the same cookie → the
+// server rotates on the first one, then treats the second as reuse
+// detection → revokes the entire family → user logged out.
+let inflightRefresh: Promise<LoginResponse | null> | null = null;
+
+async function doRefreshOnce(): Promise<LoginResponse | null> {
+  try {
+    const res = await fetch(`${API_BASE}/api/auth/refresh`, {
+      method: "POST",
+      credentials: "include",
+      headers: { Accept: "application/json" },
+    });
+    if (!res.ok) return null;
+    const body: LoginResponse = await res.json();
+    setAccessToken(body.token);
+    return body;
+  } catch {
+    return null;
   }
-  return userToken;
 }
 
-function getAuthToken(): string | undefined {
-  return getUserToken() || undefined;
+/** Coalesce concurrent refresh calls into one network round-trip. */
+function singleflightRefresh(): Promise<LoginResponse | null> {
+  if (inflightRefresh) return inflightRefresh;
+  inflightRefresh = doRefreshOnce().finally(() => {
+    inflightRefresh = null;
+  });
+  return inflightRefresh;
 }
 
-/** Handle 401 — clear token and redirect to login */
+/** Boolean wrapper for the 401-retry path in fetcher/apiCall. */
+async function silentRefresh(): Promise<boolean> {
+  return (await singleflightRefresh()) !== null;
+}
+
+// ── Unauthorized handler ────────────────────────────────────────────────
+
 function handleUnauthorized(): never {
-  setUserToken(null);
+  setAccessToken(null);
   if (typeof window !== "undefined") {
-    window.location.href = "/login";
+    // Guard against redirect loop: if we are already on /login, do not
+    // trigger another hard reload. AuthContext's render guard prevents
+    // protected children from mounting, so this path is a last resort
+    // for fetch calls that slip through.
+    if (!window.location.pathname.startsWith("/login")) {
+      window.location.href = "/login";
+    }
   }
   throw new Error("Session expired");
 }
 
+// ── Core fetch helpers ──────────────────────────────────────────────────
+// All helpers include `credentials: "include"` so the refresh cookie is
+// always sent to /api/auth/* paths (the cookie's `Path=/api/auth`
+// attribute scopes it).
+
+function authHeaders(): HeadersInit {
+  const token = getAccessToken();
+  return {
+    "Content-Type": "application/json",
+    Accept: "application/json",
+    ...(token && { Authorization: `Bearer ${token}` }),
+  };
+}
+
 export const fetcher = async <T>(url: string): Promise<T> => {
-  const token = getAuthToken();
-  const res = await fetch(url, {
-    headers: {
-      Accept: "application/json",
-      ...(token && { Authorization: `Bearer ${token}` }),
-    },
-    mode: "cors",
-  });
-  if (res.status === 401) handleUnauthorized();
+  const doFetch = async () => {
+    const token = getAccessToken();
+    return fetch(url, {
+      headers: {
+        Accept: "application/json",
+        ...(token && { Authorization: `Bearer ${token}` }),
+      },
+      credentials: "include",
+      mode: "cors",
+    });
+  };
+
+  let res = await doFetch();
+  // One silent refresh attempt on 401 before giving up.
+  if (res.status === 401) {
+    const refreshed = await silentRefresh();
+    if (refreshed) {
+      res = await doFetch();
+    }
+    if (res.status === 401) handleUnauthorized();
+  }
   if (!res.ok) {
     throw new Error(`API Error: ${res.status} ${res.statusText}`);
   }
   return res.json();
 };
 
-const authHeaders = (): HeadersInit => {
-  const token = getAuthToken();
-  return {
-    "Content-Type": "application/json",
-    Accept: "application/json",
-    ...(token && { Authorization: `Bearer ${token}` }),
-  };
-};
-
 async function apiCall<T>(url: string, method: string, body?: unknown): Promise<T> {
-  const opts: RequestInit = { method, headers: authHeaders() };
-  if (body !== undefined) {
-    opts.body = JSON.stringify(body);
+  const doFetch = async () => {
+    const opts: RequestInit = {
+      method,
+      headers: authHeaders(),
+      credentials: "include",
+    };
+    if (body !== undefined) {
+      opts.body = JSON.stringify(body);
+    }
+    return fetch(url, opts);
+  };
+
+  let res = await doFetch();
+  if (res.status === 401) {
+    const refreshed = await silentRefresh();
+    if (refreshed) {
+      res = await doFetch();
+    }
+    if (res.status === 401) handleUnauthorized();
   }
-  const res = await fetch(url, opts);
-  if (res.status === 401) handleUnauthorized();
   if (!res.ok) {
     const text = await res.text();
     throw new Error(text || `${res.status} ${res.statusText}`);
@@ -77,11 +163,17 @@ async function apiCall<T>(url: string, method: string, body?: unknown): Promise<
 export const getMetricsUrl = (hostKey: string) =>
   `${API_BASE}/api/metrics/${encodeURIComponent(hostKey)}`;
 
-/** GET /api/metrics/:host_key?start=...&end=... — time-range based metric query */
+/** GET /api/metrics/:host_key?start=...&end=... — time-range based metric query.
+ * Timestamps are rounded to the nearest minute so that requests made seconds
+ * apart produce the same URL, enabling both SWR deduplication and server-side
+ * cache hits (server rounds to 5-minute boundaries). */
 export const getMetricsRangeUrl = (hostKey: string, start: Date, end: Date) => {
+  // Floor start to minute, ceil end to minute
+  const startRounded = new Date(Math.floor(start.getTime() / 60000) * 60000);
+  const endRounded = new Date(Math.ceil(end.getTime() / 60000) * 60000);
   const params = new URLSearchParams({
-    start: start.toISOString(),
-    end: end.toISOString(),
+    start: startRounded.toISOString(),
+    end: endRounded.toISOString(),
   });
   return `${API_BASE}/api/metrics/${encodeURIComponent(hostKey)}?${params.toString()}`;
 };
@@ -340,6 +432,7 @@ export const login = async (username: string, password: string): Promise<LoginRe
   const res = await fetch(`${API_BASE}/api/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    credentials: "include",
     body: JSON.stringify({ username, password }),
   });
   if (!res.ok) {
@@ -349,11 +442,70 @@ export const login = async (username: string, password: string): Promise<LoginRe
   return res.json();
 };
 
-export const setupAdmin = (username: string, password: string) =>
-  apiCall<LoginResponse>(`${API_BASE}/api/auth/setup`, "POST", { username, password });
+export const setupAdmin = async (username: string, password: string): Promise<LoginResponse> => {
+  const res = await fetch(`${API_BASE}/api/auth/setup`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ username, password }),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new ApiError(res.status, text || `${res.status} ${res.statusText}`);
+  }
+  return res.json();
+};
 
 export const getMe = () =>
   apiCall<UserInfo>(`${API_BASE}/api/auth/me`, "GET");
+
+/** Response from POST /api/auth/sse-ticket — short-lived opaque ticket. */
+export interface SseTicketResponse {
+  ticket: string;
+  expires_in_secs: number;
+}
+
+/**
+ * Request a single-use SSE ticket. The returned ticket is consumed atomically
+ * on the next /api/stream handshake and expires after `expires_in_secs`
+ * whether consumed or not.
+ *
+ * Must be called immediately before each EventSource connection / reconnection
+ * — tickets are single-use, so re-issuing on every reconnect is required.
+ */
+export const issueSseTicket = () =>
+  apiCall<SseTicketResponse>(`${API_BASE}/api/auth/sse-ticket`, "POST");
+
+/**
+ * Tell the server to revoke every JWT it has ever issued to the caller.
+ * Best-effort: clients must still clear local state regardless of the
+ * outcome (network down, server restarting, etc.). Never throws — the
+ * UI should fall through to the local logout cleanup unconditionally.
+ */
+export const serverLogout = async (): Promise<void> => {
+  const token = getAccessToken();
+  try {
+    await fetch(`${API_BASE}/api/auth/logout`, {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        Accept: "application/json",
+        ...(token && { Authorization: `Bearer ${token}` }),
+      },
+    });
+  } catch {
+    // Swallow — the local logout path will still clear the token and redirect.
+  }
+};
+
+/**
+ * Try to restore the session by calling /api/auth/refresh. Used on
+ * page load when no in-memory access token exists (memory-only tokens
+ * are lost on reload). Delegates to the shared singleflight so that
+ * React 18 StrictMode double-effects and concurrent 401 retries all
+ * coalesce into one network call.
+ */
+export const tryRefreshSession = singleflightRefresh;
 
 // Batch metrics query — fetch metrics for multiple hosts in a single request
 export const fetchBatchMetrics = (hostKeys: string[], start: string, end: string) =>

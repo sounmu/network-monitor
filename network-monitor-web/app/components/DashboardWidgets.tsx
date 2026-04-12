@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import useSWR from "swr";
 import { Settings2, Plus, X, Grip } from "lucide-react";
 import { useSSE } from "@/app/lib/sse-context";
@@ -29,7 +29,8 @@ export default function DashboardWidgets() {
   const [editing, setEditing] = useState(false);
   const [initialized, setInitialized] = useState(false);
 
-  // Sync from server on first load — adjust state during render (React recommended pattern)
+  // Sync from server on first load (render-time state adjustment — React recommended pattern
+  // for syncing with external data, avoids the set-state-in-effect lint rule)
   if (savedWidgets && !initialized) {
     setWidgets(savedWidgets);
     setInitialized(true);
@@ -50,7 +51,7 @@ export default function DashboardWidgets() {
     setWidgets((prev) => prev.filter((w) => w.id !== id));
   };
 
-  const hostKeys = Object.keys(statusMap);
+  const hostKeys = useMemo(() => Object.keys(statusMap), [statusMap]);
 
   if (widgets.length === 0 && !editing) {
     return (

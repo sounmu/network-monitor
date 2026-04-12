@@ -11,7 +11,7 @@ export default function SidebarShell() {
   const pathname = usePathname();
   const { t } = useI18n();
 
-  // Auto-close sidebar on route change (mobile) — adjust state during render
+  // Auto-close sidebar on route change (mobile) — render-time state adjustment
   const [prevPathname, setPrevPathname] = useState(pathname);
   if (prevPathname !== pathname) {
     setPrevPathname(pathname);

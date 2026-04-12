@@ -59,23 +59,20 @@ pub async fn get_metrics_by_host_key(
                 ));
             }
 
-            let duration_hours = (end - start).num_hours();
-
-            // For long ranges (>6h), use the in-memory TTL cache to avoid repeated DB scans
-            if duration_hours > 6 {
-                let cache_key =
-                    MetricsQueryCache::make_key(&host_key, start.timestamp(), end.timestamp());
-                if let Some(cached) = state.metrics_query_cache.get(&cache_key) {
-                    Arc::unwrap_or_clone(cached)
-                } else {
-                    let result =
-                        metrics_repo::fetch_metrics_range(&state.db_pool, &host_key, start, end)
-                            .await?;
-                    state.metrics_query_cache.insert(cache_key, result.clone());
-                    result
-                }
+            // All time-range queries use the in-memory TTL cache.
+            // Cache keys are rounded to 5-minute boundaries so near-identical
+            // requests share a single entry.
+            let cache_key =
+                MetricsQueryCache::make_key(&host_key, start.timestamp(), end.timestamp());
+            if let Some(cached) = state.metrics_query_cache.get(&cache_key) {
+                Arc::unwrap_or_clone(cached)
             } else {
-                metrics_repo::fetch_metrics_range(&state.db_pool, &host_key, start, end).await?
+                let result =
+                    metrics_repo::fetch_metrics_range(&state.db_pool, &host_key, start, end)
+                        .await?;
+                // insert() returns Arc — no clone needed
+                let arc = state.metrics_query_cache.insert(cache_key, result);
+                Arc::unwrap_or_clone(arc)
             }
         }
         (Some(_), None) | (None, Some(_)) => {
@@ -138,9 +135,6 @@ pub async fn batch_metrics(
         ));
     }
 
-    let duration_hours = (req.end - req.start).num_hours();
-    let use_cache = duration_hours > 6;
-
     let futs = req.host_keys.iter().map(|host_key| {
         let pool = &state.db_pool;
         let cache = &state.metrics_query_cache;
@@ -149,18 +143,13 @@ pub async fn batch_metrics(
         let hk = host_key.clone();
 
         async move {
-            let rows = if use_cache {
-                let cache_key =
-                    MetricsQueryCache::make_key(&hk, start.timestamp(), end.timestamp());
-                if let Some(cached) = cache.get(&cache_key) {
-                    Arc::unwrap_or_clone(cached)
-                } else {
-                    let result = metrics_repo::fetch_metrics_range(pool, &hk, start, end).await?;
-                    cache.insert(cache_key, result.clone());
-                    result
-                }
+            let cache_key = MetricsQueryCache::make_key(&hk, start.timestamp(), end.timestamp());
+            let rows = if let Some(cached) = cache.get(&cache_key) {
+                Arc::unwrap_or_clone(cached)
             } else {
-                metrics_repo::fetch_metrics_range(pool, &hk, start, end).await?
+                let result = metrics_repo::fetch_metrics_range(pool, &hk, start, end).await?;
+                let arc = cache.insert(cache_key, result);
+                Arc::unwrap_or_clone(arc)
             };
             Ok::<(String, Vec<MetricsRow>), AppError>((hk, rows))
         }
@@ -187,31 +176,34 @@ pub struct PublicHostStatus {
 
 /// GET /api/public/status — public status page data (no auth)
 ///
-/// Fetches host summaries + 7-day uptime for each host concurrently.
+/// Fetches host summaries + 7-day uptime in two queries (not N+1).
 pub async fn public_status(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<PublicHostStatus>>, AppError> {
-    let hosts = metrics_repo::fetch_host_summaries(&state.db_pool).await?;
-
-    // Run all uptime queries concurrently instead of sequentially
-    let futures: Vec<_> = hosts
-        .iter()
-        .map(|host| {
-            let pool = state.db_pool.clone();
-            let host_key = host.host_key.clone();
-            async move { metrics_repo::fetch_uptime(&pool, &host_key, 7).await }
-        })
-        .collect();
-    let uptimes = futures::future::join_all(futures).await;
+    // Two parallel queries instead of 1 + N sequential queries
+    let (hosts, uptime_map) = tokio::try_join!(
+        async {
+            metrics_repo::fetch_host_summaries(&state.db_pool)
+                .await
+                .map_err(|e| AppError::Internal(e.to_string()))
+        },
+        async {
+            metrics_repo::fetch_batch_uptime_pct(&state.db_pool, 7)
+                .await
+                .map_err(|e| AppError::Internal(e.to_string()))
+        },
+    )?;
 
     let results = hosts
-        .iter()
-        .zip(uptimes)
-        .map(|(host, uptime_result)| PublicHostStatus {
-            host_key: host.host_key.clone(),
-            display_name: host.display_name.clone(),
-            is_online: host.is_online,
-            uptime_7d: uptime_result.map(|u| u.overall_pct).unwrap_or(0.0),
+        .into_iter()
+        .map(|host| {
+            let uptime_7d = uptime_map.get(&host.host_key).copied().unwrap_or(0.0);
+            PublicHostStatus {
+                host_key: host.host_key,
+                display_name: host.display_name,
+                is_online: host.is_online,
+                uptime_7d,
+            }
         })
         .collect();
 

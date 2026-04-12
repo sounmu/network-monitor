@@ -162,7 +162,7 @@ async fn check_http_endpoint(
 
     match request.timeout(timeout).send().await {
         Ok(response) => {
-            let elapsed = start.elapsed().as_millis() as i32;
+            let elapsed = i32::try_from(start.elapsed().as_millis()).unwrap_or(i32::MAX);
             let status = response.status().as_u16() as i32;
             let error = if status != monitor.expected_status {
                 Some(format!(
@@ -188,7 +188,7 @@ async fn check_http_endpoint(
             error
         }
         Err(e) => {
-            let elapsed = start.elapsed().as_millis() as i32;
+            let elapsed = i32::try_from(start.elapsed().as_millis()).unwrap_or(i32::MAX);
             let error_msg = if e.is_timeout() {
                 format!("Timeout after {}ms", monitor.timeout_ms)
             } else {

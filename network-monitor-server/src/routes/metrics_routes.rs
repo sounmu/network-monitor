@@ -30,6 +30,21 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             "/api/auth/password",
             axum::routing::put(auth_handler::change_password),
         )
+        // SSE ticket — mint a single-use ticket for the /api/stream handshake.
+        // Requires a valid user JWT; the ticket replaces exposing the long-lived
+        // JWT on a query string. See services::sse_ticket for details.
+        .route("/api/auth/sse-ticket", post(auth_handler::issue_sse_ticket))
+        // Refresh — rotate the httpOnly refresh cookie and mint a fresh
+        // short-lived access JWT. Requires no bearer — session continuity
+        // is proved via the cookie. See services::refresh_token.
+        .route("/api/auth/refresh", post(auth_handler::refresh))
+        // Logout — caller revokes all of their own JWTs.
+        .route("/api/auth/logout", post(auth_handler::logout))
+        // Admin kill-switch — force-revoke every session for a target user.
+        .route(
+            "/api/admin/users/{id}/revoke-sessions",
+            post(auth_handler::admin_revoke_user_sessions),
+        )
         // Health check (no auth — for load balancers and deploy verification)
         .route("/api/health", get(metrics_handler::health_check))
         // Dashboard layout

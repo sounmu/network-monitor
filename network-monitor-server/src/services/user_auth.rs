@@ -44,15 +44,22 @@ pub fn verify_password(password: &str, hash: &str) -> bool {
         .is_ok()
 }
 
-/// Generate a user JWT (24-hour expiry)
+/// Generate a short-lived user access JWT.
+///
+/// Access tokens live in memory on the client — never in localStorage. They
+/// are refreshed silently via `/api/auth/refresh` (rotating httpOnly cookie),
+/// so the client-observable session is effectively long while the attack
+/// surface of any individual leaked access token is bounded to
+/// `ACCESS_TTL_MINUTES`.
 pub fn generate_user_jwt(user_id: i32, username: &str, role: &str) -> Result<String, AppError> {
     let now = chrono::Utc::now().timestamp() as usize;
+    let ttl_secs = (super::refresh_token::ACCESS_TTL_MINUTES as usize) * 60;
     let claims = UserClaims {
         sub: user_id,
         username: username.to_string(),
         role: role.to_string(),
         iat: now,
-        exp: now + 24 * 60 * 60,
+        exp: now + ttl_secs,
         aud: "user".to_string(),
     };
     let key = ENCODING_KEY
@@ -79,4 +86,63 @@ pub fn decode_user_jwt(token: &str) -> Option<UserClaims> {
         .ok()
         .filter(|data| data.claims.aud.is_empty()) // Only accept if no aud (legacy)
         .map(|data| data.claims)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::services::auth::init_encoding_key;
+    use jsonwebtoken::EncodingKey;
+
+    // Must match the TEST_SECRET in services::auth::tests so the shared OnceLock
+    // holds a consistent decoding key regardless of test order.
+    const TEST_SECRET: &str = "test-secret-for-unit-tests";
+
+    #[test]
+    fn test_decode_user_jwt_rejects_token_from_other_secret() {
+        init_encoding_key(TEST_SECRET);
+
+        // Mint a user JWT with a different secret than the one the server holds.
+        let foreign_key = EncodingKey::from_secret(b"secret-from-a-previous-deployment");
+        let now = chrono::Utc::now().timestamp() as usize;
+        let claims = UserClaims {
+            sub: 1,
+            username: "alice".to_string(),
+            role: "admin".to_string(),
+            iat: now,
+            exp: now + 3600,
+            aud: "user".to_string(),
+        };
+        let foreign_token = encode(&Header::new(Algorithm::HS256), &claims, &foreign_key)
+            .expect("Token creation failed");
+
+        assert!(
+            decode_user_jwt(&foreign_token).is_none(),
+            "A user JWT minted with a rotated-away secret must be rejected"
+        );
+    }
+
+    #[test]
+    fn test_decode_user_jwt_rejects_legacy_no_aud_token_from_other_secret() {
+        init_encoding_key(TEST_SECRET);
+
+        // Legacy user token (empty aud) signed with an old secret — must still fail.
+        let foreign_key = EncodingKey::from_secret(b"secret-from-a-previous-deployment");
+        let now = chrono::Utc::now().timestamp() as usize;
+        let claims = UserClaims {
+            sub: 1,
+            username: "alice".to_string(),
+            role: "admin".to_string(),
+            iat: now,
+            exp: now + 3600,
+            aud: String::new(),
+        };
+        let foreign_token = encode(&Header::new(Algorithm::HS256), &claims, &foreign_key)
+            .expect("Token creation failed");
+
+        assert!(
+            decode_user_jwt(&foreign_token).is_none(),
+            "Legacy (no-aud) user tokens from a rotated-away secret must also be rejected"
+        );
+    }
 }

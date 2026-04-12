@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, memo } from "react";
 import useSWR from "swr";
 import { useSSE } from "@/app/lib/sse-context";
 import {
@@ -149,7 +149,7 @@ interface MiniChartCardProps {
   span2?: boolean;
 }
 
-function MiniChartCard({
+const MiniChartCard = memo(function MiniChartCard({
   title,
   color,
   isLoading,
@@ -279,7 +279,7 @@ function MiniChartCard({
       )}
     </div>
   );
-}
+});
 
 // ─── Main component ─────────────────────────
 
@@ -366,6 +366,12 @@ export default function TimeSeriesChart({ hostKey }: TimeSeriesChartProps) {
   // All chart datasets derived in one useMemo to avoid 5 separate dependency checks
   // and 5 separate iterations over the sorted array.
 
+  // Stable i18n label references — avoids recalculating all chart data on locale change
+  const loadLabels = useMemo(
+    () => ({ l1: t.chart.load1m, l5: t.chart.load5m, l15: t.chart.load15m }),
+    [t.chart.load1m, t.chart.load5m, t.chart.load15m]
+  );
+
   const { cpuData, ramData, rxData, txData, loadData, sorted } = useMemo(() => {
     const s = [...allRows].sort(
       (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
@@ -383,9 +389,9 @@ export default function TimeSeriesChart({ hostKey }: TimeSeriesChartProps) {
       ram.push({ time: r.timestamp, "RAM (%)": +r.memory_usage_percent.toFixed(1) });
       load.push({
         time: r.timestamp,
-        [t.chart.load1m]: +r.load_1min.toFixed(2),
-        [t.chart.load5m]: +r.load_5min.toFixed(2),
-        [t.chart.load15m]: +r.load_15min.toFixed(2),
+        [loadLabels.l1]: +r.load_1min.toFixed(2),
+        [loadLabels.l5]: +r.load_5min.toFixed(2),
+        [loadLabels.l15]: +r.load_15min.toFixed(2),
       });
 
       // Network delta (requires previous row)
@@ -407,7 +413,7 @@ export default function TimeSeriesChart({ hostKey }: TimeSeriesChartProps) {
     }
 
     return { cpuData: cpu, ramData: ram, rxData: rx, txData: tx, loadData: load, sorted: s };
-  }, [allRows, t.chart.load1m, t.chart.load5m, t.chart.load15m]);
+  }, [allRows, loadLabels]);
 
   // Latest summary: prefer SSE live data, fall back to last item of sorted array
   const latestFromRows = sorted.length > 0 ? sorted[sorted.length - 1] : null;
@@ -476,7 +482,7 @@ export default function TimeSeriesChart({ hostKey }: TimeSeriesChartProps) {
           data={cpuData}
           dataKey="CPU (%)"
           rangeHours={rangeHours}
-          yTickFormatter={(v) => `${v.toFixed(1)}%`}
+          yTickFormatter={fmtPercent}
           yDomain={autoYDomain(cpuData, "CPU (%)", 0)}
         />
 
@@ -487,7 +493,7 @@ export default function TimeSeriesChart({ hostKey }: TimeSeriesChartProps) {
           data={ramData}
           dataKey="RAM (%)"
           rangeHours={rangeHours}
-          yTickFormatter={(v) => `${v.toFixed(1)}%`}
+          yTickFormatter={fmtPercent}
           yDomain={autoYDomain(ramData, "RAM (%)", 0)}
         />
 
@@ -498,8 +504,8 @@ export default function TimeSeriesChart({ hostKey }: TimeSeriesChartProps) {
           data={rxData}
           dataKey="RX"
           rangeHours={rangeHours}
-          yTickFormatter={(v) => formatNetworkSpeedTick(v)}
-          tooltipFormatter={(v) => [formatNetworkSpeed(v), "RX"]}
+          yTickFormatter={formatNetworkSpeedTick}
+          tooltipFormatter={fmtRxTooltip}
         />
 
         <MiniChartCard
@@ -509,8 +515,8 @@ export default function TimeSeriesChart({ hostKey }: TimeSeriesChartProps) {
           data={txData}
           dataKey="TX"
           rangeHours={rangeHours}
-          yTickFormatter={(v) => formatNetworkSpeedTick(v)}
-          tooltipFormatter={(v) => [formatNetworkSpeed(v), "TX"]}
+          yTickFormatter={formatNetworkSpeedTick}
+          tooltipFormatter={fmtTxTooltip}
         />
 
         <MiniChartCard
@@ -519,15 +525,22 @@ export default function TimeSeriesChart({ hostKey }: TimeSeriesChartProps) {
           colors={["var(--accent-blue)", "var(--accent-purple)", "var(--accent-yellow)"]}
           isLoading={isInitialLoading}
           data={loadData}
-          dataKey={[t.chart.load1m, t.chart.load5m, t.chart.load15m]}
+          dataKey={[loadLabels.l1, loadLabels.l5, loadLabels.l15]}
           rangeHours={rangeHours}
-          yTickFormatter={(v) => v.toFixed(2)}
+          yTickFormatter={fmtLoad}
           span2
         />
       </div>
     </div>
   );
 }
+
+// ─── Stable formatter references (avoids re-creating inline closures on every render) ──
+
+const fmtPercent = (v: number) => `${v.toFixed(1)}%`;
+const fmtLoad = (v: number) => v.toFixed(2);
+const fmtRxTooltip = (v: number): [string, string] => [formatNetworkSpeed(v), "RX"];
+const fmtTxTooltip = (v: number): [string, string] => [formatNetworkSpeed(v), "TX"];
 
 // ─── Sub-components ─────────────────────────
 

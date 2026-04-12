@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 use crate::models::sse_payloads::{HostStatusPayload, SseBroadcast};
 use crate::repositories::hosts_repo::HostRow;
 use crate::repositories::metrics_repo::MetricsRow;
+use crate::services::sse_ticket::SseTicketStore;
 use tokio::sync::broadcast;
 
 // ──────────────────────────────────────────────
@@ -35,17 +36,25 @@ pub struct AppState {
     /// When 0, X-Forwarded-For is ignored and the peer socket IP is used.
     /// When >0, the Nth IP from the right of X-Forwarded-For is used.
     pub trusted_proxy_count: usize,
-    /// Cache of password_changed_at timestamps (user_id → unix timestamp).
-    /// Used to reject JWTs issued before the last password change.
-    /// Populated on startup from DB, updated on password change.
-    pub password_changed_at: Arc<RwLock<HashMap<i32, i64>>>,
+    /// Unified "tokens before this instant are invalid" cache keyed by
+    /// `user_id`. Fed by both password changes (`users.password_changed_at`)
+    /// and explicit revocations (`users.tokens_revoked_at`). The stored
+    /// value is the **later** of the two — see `services::auth` for the
+    /// verification path.
+    pub token_revocation_cutoffs: Arc<RwLock<HashMap<i32, i64>>>,
+    /// Single-use opaque ticket store for the SSE handshake.
+    /// See `services::sse_ticket` for rationale.
+    pub sse_ticket_store: Arc<SseTicketStore>,
 }
 
 impl AppState {
     /// Pre-populate last_known_status from the hosts table on startup.
     /// Ensures SSE clients see all configured hosts immediately upon connection.
     pub fn pre_populate_status(&self, hosts: &[HostRow]) {
-        let mut lks = self.last_known_status.write().expect("RwLock poisoned");
+        let mut lks = self.last_known_status.write().unwrap_or_else(|e| {
+            tracing::warn!("⚠️ [Status] RwLock poisoned during pre_populate_status, recovering");
+            e.into_inner()
+        });
         for host in hosts {
             lks.entry(host.host_key.clone())
                 .or_insert_with(|| HostStatusPayload {
@@ -255,17 +264,20 @@ impl MetricsQueryCache {
         }
     }
 
-    /// Insert a query result into the cache.
-    pub fn insert(&self, key: String, data: Vec<MetricsRow>) {
+    /// Insert a query result into the cache and return the Arc-wrapped data.
+    /// Avoids the caller needing to clone the Vec before insertion.
+    pub fn insert(&self, key: String, data: Vec<MetricsRow>) -> Arc<Vec<MetricsRow>> {
+        let arc = Arc::new(data);
         if let Ok(mut entries) = self.entries.write() {
             entries.insert(
                 key,
                 CacheEntry {
-                    data: Arc::new(data),
+                    data: Arc::clone(&arc),
                     inserted_at: Instant::now(),
                 },
             );
         }
+        arc
     }
 
     /// Remove expired entries. Called periodically from a background task.

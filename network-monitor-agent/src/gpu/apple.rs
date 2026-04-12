@@ -1,4 +1,4 @@
-use crate::GpuInfo;
+use crate::models::GpuInfo;
 
 /// Collect Apple Silicon GPU metrics via macmon (IOReport).
 /// Returns empty vec on non-Apple-Silicon hardware or if macmon fails.
@@ -17,11 +17,11 @@ fn collect_inner() -> Option<Vec<GpuInfo>> {
 
     Some(vec![GpuInfo {
         name: gpu_name,
-        gpu_usage_percent: usage_pct as u32,
+        gpu_usage_percent: (usage_pct.clamp(0.0, 100.0)) as u32,
         // Apple Silicon uses unified memory — dedicated VRAM metrics don't apply
         memory_used_mb: 0,
         memory_total_mb: 0,
-        temperature_c: metrics.temp.gpu_temp_avg as u32,
+        temperature_c: (metrics.temp.gpu_temp_avg.max(0.0)) as u32,
         power_watts: Some(metrics.gpu_power),
         frequency_mhz: Some(freq_mhz),
     }])

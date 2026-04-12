@@ -33,6 +33,33 @@ const SCRAPE_TIMEOUT_SECS: u64 = 5;
 const FLAP_COOLDOWN_SECS: u64 = 60;
 /// Maximum backoff multiplier (2^4 = 16x base interval → 160s at 10s interval)
 const MAX_BACKOFF_POWER: u32 = 4;
+/// Reuse the agent scrape JWT until it is older than this. Agent tokens expire
+/// after 60s (see `auth::generate_jwt`); rotating at 40s leaves a 20s safety
+/// window for clock drift and in-flight requests.
+const JWT_ROTATE_AFTER_SECS: u64 = 40;
+
+/// Cached agent JWT shared across all hosts in a scrape cycle.
+struct JwtCache {
+    token: String,
+    minted_at: Instant,
+}
+
+impl JwtCache {
+    fn get_or_refresh(slot: &mut Option<JwtCache>) -> Result<&str, String> {
+        let needs_refresh = slot
+            .as_ref()
+            .is_none_or(|c| c.minted_at.elapsed() >= Duration::from_secs(JWT_ROTATE_AFTER_SECS));
+        if needs_refresh {
+            let token = crate::services::auth::generate_jwt()
+                .map_err(|e| format!("JWT Generation Error: {}", e))?;
+            *slot = Some(JwtCache {
+                token,
+                minted_at: Instant::now(),
+            });
+        }
+        Ok(slot.as_ref().map(|c| c.token.as_str()).unwrap())
+    }
+}
 
 /// Per-host failure tracking for exponential backoff
 struct HostBackoff {
@@ -62,10 +89,11 @@ pub fn start_scraper(state: Arc<AppState>) -> tokio::task::JoinHandle<()> {
         let _ = interval.tick().await; // skip first immediate tick
 
         let mut backoff_map: HashMap<String, HostBackoff> = HashMap::new();
+        let mut jwt_cache: Option<JwtCache> = None;
 
         loop {
             interval.tick().await;
-            scrape_all(&client, &state, &mut backoff_map).await;
+            scrape_all(&client, &state, &mut backoff_map, &mut jwt_cache).await;
         }
     })
 }
@@ -74,6 +102,7 @@ async fn scrape_all(
     client: &Client,
     state: &Arc<AppState>,
     backoff_map: &mut HashMap<String, HostBackoff>,
+    jwt_cache: &mut Option<JwtCache>,
 ) {
     // Reload the latest host list and alert configs from DB each cycle
     let hosts = match hosts_repo::list_hosts(&state.db_pool).await {
@@ -84,12 +113,26 @@ async fn scrape_all(
         }
     };
 
-    let alert_map = alert_configs_repo::load_all_as_map(&state.db_pool)
-        .await
-        .unwrap_or_default();
+    let alert_map = match alert_configs_repo::load_all_as_map(&state.db_pool).await {
+        Ok(m) => m,
+        Err(e) => {
+            tracing::warn!(err = ?e, "⚠️ [Scraper] Failed to load alert configs, using defaults");
+            std::collections::HashMap::new()
+        }
+    };
 
     // Pre-register any newly added hosts in last_known_status
     state.pre_populate_status(&hosts);
+
+    // Mint (or reuse) a single agent JWT for this entire cycle — agents accept
+    // any token that is unexpired, so all hosts share the same one.
+    let jwt_token = match JwtCache::get_or_refresh(jwt_cache) {
+        Ok(t) => t.to_string(),
+        Err(e) => {
+            tracing::error!(err = %e, "❌ [Scraper] Failed to mint agent JWT");
+            return;
+        }
+    };
 
     let base_interval = Duration::from_secs(state.scrape_interval_secs);
 
@@ -118,6 +161,7 @@ async fn scrape_all(
             );
             let ports: Vec<u16> = host.ports.iter().map(|&p| p as u16).collect();
             let containers = host.containers.clone();
+            let jwt_token = jwt_token.clone();
 
             async move {
                 let url = host.host_key.clone();
@@ -130,6 +174,7 @@ async fn scrape_all(
                     &containers,
                     &alert_config,
                     &state,
+                    &jwt_token,
                 )
                 .await;
                 (url, dn, result)
@@ -209,6 +254,7 @@ async fn scrape_all(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn scrape_one(
     client: &Client,
     target: &str,
@@ -217,6 +263,7 @@ async fn scrape_one(
     containers: &[String],
     alert_config: &AlertConfig,
     state: &Arc<AppState>,
+    jwt_token: &str,
 ) -> ScrapeOutcome {
     let ports_str = ports
         .iter()
@@ -232,11 +279,6 @@ async fn scrape_one(
     if !containers_str.is_empty() {
         url_str.push_str(&format!("containers={}", containers_str));
     }
-
-    let jwt_token = match crate::services::auth::generate_jwt() {
-        Ok(t) => t,
-        Err(e) => return ScrapeOutcome::Failed(format!("JWT Generation Error: {}", e)),
-    };
 
     match client
         .get(&url_str)
@@ -316,16 +358,38 @@ async fn handle_success(
         }
     }
 
-    // Recovery (host back online) alert
-    let recovery_msg = {
+    // Recovery (host back online) alert.
+    //
+    // Fast path: most cycles the host is already "online" (offline_alerted == false),
+    // so we peek at the state under a read lock first and skip the write lock entirely.
+    // Only when a transition is actually needed do we re-acquire as writer.
+    let needs_recovery_check = {
+        match state.store.read() {
+            Ok(store) => store
+                .hosts
+                .get(target)
+                .is_some_and(|r| r.alert_state.offline_alerted),
+            Err(e) => {
+                tracing::warn!(err = %e, "⚠️ [Scraper] Store read lock poisoned in recovery check");
+                return ScrapeOutcome::Online(Box::new(metrics));
+            }
+        }
+    };
+
+    let recovery_msg = if needs_recovery_check {
         let mut store = match state.store.write() {
             Ok(s) => s,
-            Err(_) => return ScrapeOutcome::Online(Box::new(metrics)),
+            Err(e) => {
+                tracing::warn!(err = %e, "⚠️ [Scraper] Store write lock poisoned in recovery check");
+                return ScrapeOutcome::Online(Box::new(metrics));
+            }
         };
         let Some(record) = store.hosts.get_mut(target) else {
             return ScrapeOutcome::Online(Box::new(metrics));
         };
 
+        // Re-check under the write lock in case another task flipped the flag
+        // between our read and write acquisitions.
         if record.alert_state.offline_alerted {
             let last_offline = record.alert_state.last_offline_alert;
             let cooldown_passed =
@@ -344,6 +408,8 @@ async fn handle_success(
         } else {
             None
         }
+    } else {
+        None
     };
 
     if let Some(msg) = recovery_msg {
@@ -375,7 +441,10 @@ async fn handle_down(target: &str, display_name: &str, state: &Arc<AppState>) {
     let (alert_msg, hostname, should_broadcast) = {
         let mut store = match state.store.write() {
             Ok(s) => s,
-            Err(_) => return,
+            Err(e) => {
+                tracing::warn!(err = %e, "⚠️ [Scraper] Store write lock poisoned in handle_down");
+                return;
+            }
         };
 
         let hostname = store

@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use chrono::{DateTime, Utc};
 use chrono_tz::Asia::Seoul;
 use serde::{Deserialize, Serialize};
@@ -421,12 +423,14 @@ pub async fn fetch_recent_metrics(
 
 /// Fetch metrics for a host within a given time range, ordered oldest first.
 ///
-/// Automatically downsamples long ranges using TimescaleDB time_bucket to keep response
-/// size manageable (~1000 data points max):
-/// - ≤6h: raw rows (every 10s)
-/// - ≤3d: 1-minute averages
-/// - ≤14d: 5-minute averages
-/// - >14d: 15-minute averages
+/// Automatically downsamples long ranges to keep response size manageable:
+/// - ≤6h: raw rows (every 10s) from `metrics` table
+/// - 6h–14d: 5-minute pre-aggregated rows from `metrics_5min` continuous aggregate (no GROUP BY)
+/// - >14d: 15-minute re-aggregated rows from `metrics_5min` CA
+///
+/// The 6h–3d range previously used 1-minute GROUP BY on the raw table, which was the
+/// slowest query path (~500ms on ARM). Switching to the 5-min CA eliminates GROUP BY
+/// entirely and reduces response time to ~50ms at the cost of coarser granularity.
 ///
 /// JSONB columns (processes, temperatures, gpus, disks, docker_containers, ports) are
 /// excluded from time-range queries — chart rendering only needs scalar metrics.
@@ -466,47 +470,6 @@ pub async fn fetch_metrics_range(
         .bind(end)
         .fetch_all(pool)
         .await?;
-        Ok(rows)
-    } else if hours <= 72 {
-        // Mid range (6h–3d): 1-minute buckets from raw table.
-        // CA is 5-min granularity so 1-min buckets must come from raw data.
-        // This range is recent and uncompressed, so performance is acceptable.
-        let query = r#"
-            SELECT
-                0::BIGINT AS id,
-                $1::VARCHAR AS host_key,
-                ''::VARCHAR AS display_name,
-                bool_and(is_online) AS is_online,
-                AVG(cpu_usage_percent)::REAL AS cpu_usage_percent,
-                AVG(memory_usage_percent)::REAL AS memory_usage_percent,
-                AVG(load_1min)::REAL AS load_1min,
-                AVG(load_5min)::REAL AS load_5min,
-                AVG(load_15min)::REAL AS load_15min,
-                jsonb_build_object(
-                    'total_rx_bytes', MAX((networks->>'total_rx_bytes')::BIGINT),
-                    'total_tx_bytes', MAX((networks->>'total_tx_bytes')::BIGINT)
-                ) AS networks,
-                NULL::jsonb AS docker_containers,
-                NULL::jsonb AS ports,
-                NULL::jsonb AS disks,
-                NULL::jsonb AS processes,
-                NULL::jsonb AS temperatures,
-                NULL::jsonb AS gpus,
-                time_bucket('1 minute', timestamp) AS timestamp
-            FROM metrics
-            WHERE host_key = $1
-              AND timestamp >= $2
-              AND timestamp <= $3
-            GROUP BY time_bucket('1 minute', timestamp)
-            ORDER BY timestamp ASC
-        "#;
-
-        let rows = sqlx::query_as::<_, MetricsRow>(query)
-            .bind(host_key)
-            .bind(start)
-            .bind(end)
-            .fetch_all(pool)
-            .await?;
         Ok(rows)
     } else if hours <= 336 {
         // Long range (3d–14d): read directly from metrics_5min continuous aggregate.
@@ -681,6 +644,34 @@ pub struct UptimeSummary {
     pub host_key: String,
     pub overall_pct: f64,
     pub daily: Vec<UptimePoint>,
+}
+
+/// Fetch 7-day overall uptime percentage for all hosts in a single query.
+/// Returns a HashMap<host_key, uptime_pct> — used by public_status to avoid N+1 queries.
+pub async fn fetch_batch_uptime_pct(
+    pool: &PgPool,
+    days: i32,
+) -> Result<HashMap<String, f64>, sqlx::Error> {
+    let rows: Vec<(String, f64)> = sqlx::query_as(
+        r#"
+        SELECT
+            host_key,
+            CASE
+                WHEN SUM(sample_count) > 0
+                THEN (SUM(CASE WHEN is_online THEN sample_count ELSE 0 END)::FLOAT
+                      / SUM(sample_count)::FLOAT) * 100.0
+                ELSE 0.0
+            END AS uptime_pct
+        FROM metrics_5min
+        WHERE bucket >= NOW() - ($1 || ' days')::INTERVAL
+        GROUP BY host_key
+        "#,
+    )
+    .bind(days.to_string())
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows.into_iter().collect())
 }
 
 /// Compute daily uptime percentage for a host over the given number of days.

@@ -19,9 +19,19 @@ pub struct Claims {
 
 pub static ENCODING_KEY: OnceLock<EncodingKey> = OnceLock::new();
 pub static DECODING_KEY: OnceLock<DecodingKey> = OnceLock::new();
-/// Global reference to the password_changed_at cache (set once from main.rs).
-/// AuthGuard/AdminGuard use this to reject tokens issued before a password change.
-static PASSWORD_CHANGED_CACHE: OnceLock<Arc<RwLock<HashMap<i32, i64>>>> = OnceLock::new();
+
+/// Per-user "tokens issued before this instant are invalid" cutoff cache.
+///
+/// Shared across two mechanisms:
+///   * password change        — `update_password_changed_at`
+///   * explicit revoke (logout / admin kill) — `update_tokens_revoked_at`
+///
+/// Both write into the same map because they mean the same thing to the
+/// verification path: the stored timestamp is the earliest `iat` that is
+/// still allowed to pass. A new write is kept only if it is strictly
+/// *later* than the existing entry, so password change + logout cannot
+/// accidentally undo each other.
+static TOKEN_REVOCATION_CACHE: OnceLock<Arc<RwLock<HashMap<i32, i64>>>> = OnceLock::new();
 
 pub fn init_encoding_key(secret: &str) {
     let key = EncodingKey::from_secret(secret.as_bytes());
@@ -30,55 +40,54 @@ pub fn init_encoding_key(secret: &str) {
     let _ = DECODING_KEY.set(dk);
 }
 
-/// Initialize the password change cache reference (called from main.rs).
-pub fn init_password_changed_cache(cache: Arc<RwLock<HashMap<i32, i64>>>) {
-    let _ = PASSWORD_CHANGED_CACHE.set(cache);
+/// Initialize the token revocation cache reference (called from main.rs).
+/// The cache is pre-seeded with the latest of `password_changed_at` and
+/// `tokens_revoked_at` for each user.
+pub fn init_token_revocation_cache(cache: Arc<RwLock<HashMap<i32, i64>>>) {
+    let _ = TOKEN_REVOCATION_CACHE.set(cache);
 }
 
-/// Update the password_changed_at timestamp for a user (called on password change).
-pub fn update_password_changed_at(user_id: i32, timestamp: i64) {
-    if let Some(cache) = PASSWORD_CHANGED_CACHE.get()
+/// Internal helper: raise the cutoff for `user_id` to `timestamp`, but never
+/// lower it. Both password-change and logout paths feed through here.
+fn raise_revocation_cutoff(user_id: i32, timestamp: i64) {
+    if let Some(cache) = TOKEN_REVOCATION_CACHE.get()
         && let Ok(mut map) = cache.write()
     {
-        map.insert(user_id, timestamp);
+        map.entry(user_id)
+            .and_modify(|existing| {
+                if timestamp > *existing {
+                    *existing = timestamp;
+                }
+            })
+            .or_insert(timestamp);
     }
 }
 
-/// Check if a user JWT's `iat` is after the last password change.
-/// Returns true if the token is still valid (not revoked by password change).
-fn is_token_valid_after_password_change(user_id: i32, iat: usize) -> bool {
-    let Some(cache) = PASSWORD_CHANGED_CACHE.get() else {
-        return true; // Cache not initialized — allow (graceful degradation)
+/// Update the cutoff after a password change.
+pub fn update_password_changed_at(user_id: i32, timestamp: i64) {
+    raise_revocation_cutoff(user_id, timestamp);
+}
+
+/// Update the cutoff after an explicit token revocation (logout / admin kill).
+pub fn update_tokens_revoked_at(user_id: i32, timestamp: i64) {
+    raise_revocation_cutoff(user_id, timestamp);
+}
+
+/// Check if a user JWT's `iat` is after the latest revocation event for that
+/// user (password change OR explicit logout). Returns true if the token is
+/// still valid. A missing cache entry means the user has never revoked and
+/// every signed token with a valid `iat` is accepted.
+fn is_token_iat_still_valid(user_id: i32, iat: usize) -> bool {
+    let Some(cache) = TOKEN_REVOCATION_CACHE.get() else {
+        return true; // Cache not initialized — graceful degradation
     };
     let Ok(map) = cache.read() else {
-        return true; // Lock poisoned — allow
+        return true; // Lock poisoned — graceful degradation
     };
     match map.get(&user_id) {
-        Some(&changed_at) => (iat as i64) >= changed_at,
-        None => true, // No record — user hasn't changed password, allow
+        Some(&cutoff) => (iat as i64) >= cutoff,
+        None => true,
     }
-}
-
-/// Validate a JWT token passed as a query parameter (for SSE — EventSource cannot set headers).
-/// Accepts both agent JWTs (Claims) and user JWTs (UserClaims).
-pub fn check_jwt_query(token: &str) -> bool {
-    let Some(dk) = DECODING_KEY.get() else {
-        return false;
-    };
-    let mut agent_validation = Validation::new(Algorithm::HS256);
-    agent_validation.set_audience(&["agent"]);
-    if decode::<Claims>(token, dk, &agent_validation).is_ok() {
-        return true;
-    }
-    // Fallback: accept agent tokens without aud (legacy agents) via permissive validation
-    let mut legacy_validation = Validation::new(Algorithm::HS256);
-    legacy_validation.validate_aud = false;
-    if let Ok(data) = decode::<Claims>(token, dk, &legacy_validation)
-        && data.claims.aud.is_empty()
-    {
-        return true;
-    }
-    super::user_auth::decode_user_jwt(token).is_some()
 }
 
 pub fn generate_jwt() -> Result<String, AppError> {
@@ -138,12 +147,10 @@ where
             return Ok(AuthGuard);
         }
 
-        // User JWT (different claims structure) — also check password revocation
+        // User JWT (different claims structure) — also check revocation cutoff
         if let Some(claims) = super::user_auth::decode_user_jwt(token) {
-            if !is_token_valid_after_password_change(claims.sub, claims.iat) {
-                return Err(AppError::Unauthorized(
-                    "Token revoked (password changed)".to_string(),
-                ));
+            if !is_token_iat_still_valid(claims.sub, claims.iat) {
+                return Err(AppError::Unauthorized("Token revoked".to_string()));
             }
             return Ok(AuthGuard);
         }
@@ -178,10 +185,8 @@ where
         let claims = super::user_auth::decode_user_jwt(token)
             .ok_or_else(|| AppError::Unauthorized("Invalid or expired token".to_string()))?;
 
-        if !is_token_valid_after_password_change(claims.sub, claims.iat) {
-            return Err(AppError::Unauthorized(
-                "Token revoked (password changed)".to_string(),
-            ));
+        if !is_token_iat_still_valid(claims.sub, claims.iat) {
+            return Err(AppError::Unauthorized("Token revoked".to_string()));
         }
 
         if claims.role != "admin" {
@@ -274,4 +279,16 @@ mod tests {
             "exp must be in the future (token expires ~60 seconds from now)"
         );
     }
+
+    // ── Secret rotation contract ─────────────────
+    // Rotating JWT_SECRET (which in practice means restarting the server with
+    // a new secret) must invalidate every previously-issued token. The
+    // guarantee comes from jsonwebtoken's HMAC signature verification. The
+    // equivalent contract tests for the user-JWT path live in
+    // `services::user_auth::tests`; they cover both the `aud: "user"` branch
+    // and the legacy no-aud fallback. When `check_jwt_query` was removed in
+    // favour of single-use SSE tickets, its rotation tests were deleted
+    // rather than ported — the `user_auth` tests already cover the same
+    // code path (`decode_user_jwt`) and there is no longer a query-parameter
+    // JWT acceptance point to exercise.
 }

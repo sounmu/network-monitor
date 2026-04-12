@@ -12,42 +12,15 @@
 
 **network-monitor** is a pull-based server monitoring system built with Rust and Next.js. A central server scrapes lightweight agents installed on each target host, stores metrics in TimescaleDB, and streams real-time data to the web dashboard via SSE.
 
-**Key features:**
-- CPU, memory, disk, load average time-series charts
-- Top process monitoring (CPU/memory sorted)
-- Temperature sensor monitoring
-- NVIDIA GPU usage, VRAM, and temperature tracking
-- Docker container status tracking
-- Port open/closed monitoring
-- Multi-channel alert notifications (Discord, Slack, Email)
-- Disk usage alerts with per-mount-point tracking
-- Alert history logging and browsing
-- Per-host and global alert configuration via web UI
-- Uptime history with daily breakdown
-- Public status page (no auth required)
-- Dark mode support with system preference detection
-- i18n: English (default) + Korean
-- HTTP endpoint monitoring (response time, status code, uptime tracking)
-- Ping/TCP reachability monitoring for network devices
-- Customizable dashboard with pinnable host status, alert feed, and uptime widgets
-- User authentication with Argon2 password hashing and JWT sessions
-- PWA support (installable, offline-capable app shell)
-- Prometheus-compatible `/metrics` endpoint for Grafana integration
-- Monitor failure alerting (HTTP/Ping failures trigger notifications)
-- Admin role enforcement on mutation endpoints
-- Login rate limiting (10 attempts per 5 minutes per IP)
-- Graceful shutdown with 5-second drain timeout (SIGTERM/SIGINT handling)
-- Zero-Trust deployment via Cloudflare Tunnel (no exposed host ports)
-- Continuous Aggregate (5-min pre-aggregated metrics) for fast long-range queries
-- Batch metrics INSERT (single DB round-trip per scrape cycle)
-- Batch metrics API for multi-host chart queries
-- SSRF protection on webhooks, HTTP monitors, and ping monitors
-- Token revocation on password change (iat + password_changed_at)
-- Security headers (X-Content-Type-Options, X-Frame-Options, Referrer-Policy)
-- Toast notifications for login errors (401/429/network) with i18n support
-- TimescaleDB compression on alert/monitor history tables (50-70% storage savings)
-- Batched SSE updates via requestAnimationFrame (reduced re-renders)
-- Lazy-loaded chart components for faster initial page load
+**What sets it apart:**
+- **Pull-scraping behind Zero Trust.** The server reaches agents over Cloudflare Tunnel, so hosts behind NAT or a firewall are monitored without opening a single inbound port.
+- **Binary agent protocol, gzipped.** Agents serve `bincode` over HTTP — not JSON, not Prometheus text — with `tower-http` gzip on top, so scrape payloads stay small over tunneled links.
+- **Time-range-aware TimescaleDB query routing.** `≤6h` hits raw 10 s metrics; `6h–14d` reads the 5-min continuous aggregate; `>14d` re-aggregates that CA to 15-min buckets. Long-range charts never scan the raw hypertable.
+- **One stack instead of four.** Host metrics, Docker state, HTTP/Ping external monitors, and multi-channel alerting (Discord / Slack / Email) live in a single self-hosted service — no Prometheus + Uptime Kuma + Alertmanager + Grafana to wire together.
+- **Streaming SSE dashboard.** Status and metrics push over one SSE connection; the client batches bursts of up to 100 events into a single React render via `requestAnimationFrame`.
+- **Event-driven Docker cache.** The agent subscribes to the Docker Events API instead of polling `docker ps`, keeping container state fresh with effectively zero daemon load between events.
+- **NVIDIA and Apple Silicon GPU in one agent.** NVML and macmon are both wired in behind Cargo feature flags — the same binary handles a CUDA rig or an M-series Mac.
+- **Single-binary Rust for both server and agent.** No Python runtime, no JVM, no sidecars. The agent runs comfortably on a Raspberry Pi.
 
 ---
 

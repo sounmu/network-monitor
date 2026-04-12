@@ -66,6 +66,13 @@ pub async fn find_by_username(
         .await
 }
 
+pub async fn find_by_id(pool: &PgPool, user_id: i32) -> Result<Option<UserRow>, sqlx::Error> {
+    sqlx::query_as::<_, UserRow>("SELECT * FROM users WHERE id = $1")
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await
+}
+
 pub async fn create_user(
     pool: &PgPool,
     username: &str,
@@ -109,6 +116,32 @@ pub async fn load_password_changed_at(
         sqlx::query_as("SELECT id, password_changed_at FROM users")
             .fetch_all(pool)
             .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(id, ts)| (id, ts.timestamp()))
+        .collect())
+}
+
+/// Stamp `tokens_revoked_at = NOW()` for a user. Called on logout and admin
+/// session-kill. Any JWT whose `iat` predates this row is invalidated.
+pub async fn revoke_user_tokens(pool: &PgPool, user_id: i32) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE users SET tokens_revoked_at = NOW(), updated_at = NOW() WHERE id = $1")
+        .bind(user_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Load tokens_revoked_at timestamps for users who have one set (startup cache).
+/// Users who have never had a revocation return no row, so the map is sparse.
+pub async fn load_tokens_revoked_at(
+    pool: &PgPool,
+) -> Result<std::collections::HashMap<i32, i64>, sqlx::Error> {
+    let rows: Vec<(i32, DateTime<Utc>)> = sqlx::query_as(
+        "SELECT id, tokens_revoked_at FROM users WHERE tokens_revoked_at IS NOT NULL",
+    )
+    .fetch_all(pool)
+    .await?;
     Ok(rows
         .into_iter()
         .map(|(id, ts)| (id, ts.timestamp()))

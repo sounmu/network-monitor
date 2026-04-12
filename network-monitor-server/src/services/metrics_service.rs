@@ -193,8 +193,8 @@ pub async fn process_metrics(
 
     // ── Lock region: only lightweight data manipulation ──
     // AlertMetricPoint is a Copy type (~20 B), so pushing inside the lock is trivially cheap.
-    // Removing AgentMetrics.clone() ensures no String/Vec heap allocations inside the lock.
-    let (alert_actions, history_count, metrics_payload, status_payload) = {
+    // Vec clones for HostStatusPayload are deferred until after the lock is released.
+    let (alert_actions, history_count, metrics_payload, needs_status) = {
         let mut store = state.store.write().map_err(|e| {
             AppError::Internal(format!("Failed to acquire store write lock: {}", e))
         })?;
@@ -218,8 +218,7 @@ pub async fn process_metrics(
         // ── Compute per-second network throughput ──
         let network_rate = compute_network_rate(&metrics.network, &mut record.network_prev);
 
-        // ── status SSE payload (only generated on change detection or periodic interval) ──
-        // Built before the metrics payload so that server_ts ownership can be moved.
+        // ── Determine if status SSE payload is needed (decision only, no allocation) ──
         let new_hash = compute_status_hash(
             &metrics.docker_containers,
             &metrics.ports,
@@ -231,30 +230,13 @@ pub async fn process_metrics(
             .is_none_or(|t| t.elapsed() >= Duration::from_secs(STATUS_PERIODIC_INTERVAL_SECS));
         let hash_changed = record.prev_status_hash != Some(new_hash);
 
-        let (status_payload, ts_for_metrics) = if hash_changed || periodic_elapsed {
+        let needs_status = hash_changed || periodic_elapsed;
+        if needs_status {
             record.prev_status_hash = Some(new_hash);
             record.last_status_sent = Some(now);
-            let ts_clone = server_ts.clone();
-            (
-                Some(HostStatusPayload {
-                    host_key: target_str.clone(),
-                    display_name: hostname.clone(),
-                    is_online: metrics.is_online,
-                    last_seen: server_ts,
-                    docker_containers: metrics.docker_containers.clone(),
-                    ports: metrics.ports.clone(),
-                    disks: metrics.system.disks.clone(),
-                    processes: metrics.system.processes.clone(),
-                    temperatures: metrics.system.temperatures.clone(),
-                    gpus: metrics.system.gpus.clone(),
-                }),
-                ts_clone,
-            )
-        } else {
-            (None, server_ts)
-        };
+        }
 
-        // ── Build metrics SSE payload ──
+        // ── Build metrics SSE payload (only scalar copies, no heap allocation) ──
         let metrics_payload = HostMetricsPayload {
             host_key: target_str,
             display_name: hostname.clone(),
@@ -265,7 +247,7 @@ pub async fn process_metrics(
             load_5min: metrics.load_average.five_min,
             load_15min: metrics.load_average.fifteen_min,
             network_rate,
-            timestamp: ts_for_metrics,
+            timestamp: server_ts.clone(),
         };
 
         // ── Evaluate alert conditions (iterates alert_history only, no I/O) ──
@@ -278,13 +260,26 @@ pub async fn process_metrics(
             "📊 [Store] Recorded metrics"
         );
 
-        (
-            alert_actions,
-            history_count,
-            metrics_payload,
-            status_payload,
-        )
+        (alert_actions, history_count, metrics_payload, needs_status)
         // ← RwLockWriteGuard is dropped here, releasing the lock immediately
+    };
+
+    // ── Build status payload OUTSIDE the lock (Vec clones happen here, no contention) ──
+    let status_payload = if needs_status {
+        Some(HostStatusPayload {
+            host_key: metrics_payload.host_key.clone(),
+            display_name: hostname.clone(),
+            is_online: metrics.is_online,
+            last_seen: server_ts,
+            docker_containers: metrics.docker_containers.clone(),
+            ports: metrics.ports.clone(),
+            disks: metrics.system.disks.clone(),
+            processes: metrics.system.processes.clone(),
+            temperatures: metrics.system.temperatures.clone(),
+            gpus: metrics.system.gpus.clone(),
+        })
+    } else {
+        None
     };
 
     // ── Send alerts outside the lock (async) ──

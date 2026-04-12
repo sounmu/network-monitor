@@ -66,7 +66,7 @@ export default function AlertsPage() {
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
 
-  // Initialize global form
+  // Initialize global form (render-time state adjustment)
   if (globalConfigs && !globalForm) {
     setGlobalForm(configsToForm(globalConfigs));
   }

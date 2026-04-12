@@ -39,9 +39,16 @@ async fn main() -> anyhow::Result<()> {
     }
     services::auth::init_encoding_key(&jwt_secret);
 
-    // ── Load password_changed_at cache for token revocation ──
-    let password_changed_cache = Arc::new(RwLock::new(HashMap::<i32, i64>::new()));
-    services::auth::init_password_changed_cache(Arc::clone(&password_changed_cache));
+    // ── Unified token revocation cache ──
+    // Two mechanisms feed into this cache, both meaning "JWTs with `iat`
+    // older than the stored value are rejected":
+    //   (a) password changes         — `users.password_changed_at`
+    //   (b) explicit logouts / admin — `users.tokens_revoked_at`
+    // The cache is empty at first and populated below, once the DB pool and
+    // migrations are both ready.
+    let token_revocation_cache: Arc<RwLock<HashMap<i32, i64>>> =
+        Arc::new(RwLock::new(HashMap::new()));
+    services::auth::init_token_revocation_cache(Arc::clone(&token_revocation_cache));
 
     // ── Optional environment variables with defaults ──
     let scrape_interval_secs: u64 = std::env::var("SCRAPE_INTERVAL_SECS")
@@ -75,10 +82,16 @@ async fn main() -> anyhow::Result<()> {
     // ── SSE broadcast channel ──
     // Size the buffer to hold at least one full scrape cycle (N hosts × 2 events each)
     // so slow consumers don't get Lagged errors under normal load.
-    let host_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM hosts")
+    let host_count: i64 = match sqlx::query_scalar("SELECT COUNT(*) FROM hosts")
         .fetch_one(&db_pool)
         .await
-        .unwrap_or(0);
+    {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(err = ?e, "⚠️ [SSE] Failed to count hosts, using default buffer size");
+            0
+        }
+    };
     let env_buffer: usize = std::env::var("SSE_BUFFER_SIZE")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -98,6 +111,8 @@ async fn main() -> anyhow::Result<()> {
         .parse()
         .unwrap_or(0);
 
+    let sse_ticket_store = Arc::new(services::sse_ticket::SseTicketStore::new());
+
     let state = Arc::new(AppState {
         store: Arc::new(RwLock::new(MetricsStore::new())),
         http_client: reqwest::Client::new(),
@@ -111,7 +126,8 @@ async fn main() -> anyhow::Result<()> {
             std::time::Duration::from_secs(300),
         )),
         trusted_proxy_count,
-        password_changed_at: password_changed_cache,
+        token_revocation_cutoffs: Arc::clone(&token_revocation_cache),
+        sse_ticket_store: Arc::clone(&sse_ticket_store),
     });
 
     // Background task: evict expired cache entries every 60 seconds
@@ -121,6 +137,38 @@ async fn main() -> anyhow::Result<()> {
             metrics_query_cache.evict_expired();
         }
     });
+
+    // Background task: evict expired SSE tickets every 30 seconds.
+    // Lazy eviction on `consume` already handles the hot path, but a periodic
+    // sweep prevents unbounded growth if tickets are issued but never redeemed.
+    {
+        let store = Arc::clone(&sse_ticket_store);
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                store.evict_expired();
+            }
+        });
+    }
+
+    // Background task: delete `refresh_tokens` rows that have been expired
+    // for more than a week. Keeps the table bounded without losing recent
+    // forensic history (admins may want to inspect issued_at / ip on a
+    // recent session).
+    {
+        let pool = state.db_pool.clone();
+        tokio::spawn(async move {
+            loop {
+                // Run once per hour — churn is low and DELETE is cheap.
+                tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+                match repositories::refresh_tokens_repo::delete_expired(&pool).await {
+                    Ok(0) => {}
+                    Ok(n) => tracing::info!(count = n, "🧹 [Auth] Evicted expired refresh tokens"),
+                    Err(e) => tracing::warn!(err = ?e, "⚠️ [Auth] refresh_tokens cleanup failed"),
+                }
+            }
+        });
+    }
 
     // ── Ensure continuous aggregate covers full retention period (90 days) ──
     // The refresh policy must match the data retention so long-range queries
@@ -162,9 +210,10 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // ── Pre-populate caches from DB (parallel) ──
-    let (hosts_result, password_result) = tokio::join!(
+    let (hosts_result, password_result, revoked_result) = tokio::join!(
         repositories::hosts_repo::list_hosts(&state.db_pool),
         repositories::users_repo::load_password_changed_at(&state.db_pool),
+        repositories::users_repo::load_tokens_revoked_at(&state.db_pool),
     );
 
     match hosts_result {
@@ -175,15 +224,48 @@ async fn main() -> anyhow::Result<()> {
         Err(e) => tracing::warn!(err = ?e, "⚠️ [Hosts] Failed to load initial hosts"),
     }
 
-    match password_result {
-        Ok(map) => {
-            if let Ok(mut cache) = state.password_changed_at.write() {
-                *cache = map;
+    // Merge password_changed_at and tokens_revoked_at into the unified cutoff
+    // cache. For each user we keep the **later** of the two timestamps, since
+    // the semantic is "tokens with iat older than this are rejected".
+    {
+        let mut cutoffs = match state.token_revocation_cutoffs.write() {
+            Ok(c) => c,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        match password_result {
+            Ok(map) => {
+                for (uid, ts) in map {
+                    cutoffs.insert(uid, ts);
+                }
+                tracing::info!("🔐 [Auth] password_changed_at timestamps loaded");
             }
-            tracing::info!("🔐 [Auth] Password change timestamps loaded");
+            Err(e) => tracing::warn!(
+                err = ?e,
+                "⚠️ [Auth] Failed to load password_changed_at (column may be missing pre-migration)"
+            ),
         }
-        Err(e) => {
-            tracing::warn!(err = ?e, "⚠️ [Auth] Failed to load password timestamps (column may not exist yet)")
+        match revoked_result {
+            Ok(map) => {
+                let count = map.len();
+                for (uid, ts) in map {
+                    cutoffs
+                        .entry(uid)
+                        .and_modify(|existing| {
+                            if ts > *existing {
+                                *existing = ts;
+                            }
+                        })
+                        .or_insert(ts);
+                }
+                tracing::info!(
+                    revoked_user_count = count,
+                    "🔐 [Auth] tokens_revoked_at timestamps merged"
+                );
+            }
+            Err(e) => tracing::warn!(
+                err = ?e,
+                "⚠️ [Auth] Failed to load tokens_revoked_at (column may be missing pre-migration)"
+            ),
         }
     }
 
@@ -207,7 +289,15 @@ async fn main() -> anyhow::Result<()> {
                 Method::DELETE,
                 Method::OPTIONS,
             ])
-            .allow_headers(tower_http::cors::Any)
+            .allow_headers([
+                axum::http::header::AUTHORIZATION,
+                axum::http::header::CONTENT_TYPE,
+                axum::http::header::ACCEPT,
+            ])
+            // Required for the httpOnly refresh cookie to be sent/received
+            // by the browser on cross-origin fetch calls with
+            // `credentials: "include"`.
+            .allow_credentials(true)
     };
     let compression = tower_http::compression::CompressionLayer::new();
 
@@ -268,11 +358,18 @@ async fn shutdown_signal() {
 
     #[cfg(unix)]
     {
-        let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-            .expect("failed to install SIGTERM handler");
-        tokio::select! {
-            _ = ctrl_c => tracing::info!("🛑 Received Ctrl+C"),
-            _ = sigterm.recv() => tracing::info!("🛑 Received SIGTERM"),
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut sigterm) => {
+                tokio::select! {
+                    _ = ctrl_c => tracing::info!("🛑 Received Ctrl+C"),
+                    _ = sigterm.recv() => tracing::info!("🛑 Received SIGTERM"),
+                }
+            }
+            Err(e) => {
+                tracing::warn!(err = ?e, "⚠️ Failed to install SIGTERM handler, falling back to Ctrl+C only");
+                ctrl_c.await.ok();
+                tracing::info!("🛑 Received Ctrl+C");
+            }
         }
     }
 

@@ -6,4 +6,5 @@ pub mod http_monitors_repo;
 pub mod metrics_repo;
 pub mod notification_channels_repo;
 pub mod ping_monitors_repo;
+pub mod refresh_tokens_repo;
 pub mod users_repo;
