@@ -210,9 +210,13 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
-    // ── Ensure continuous aggregate covers full retention period (90 days) ──
-    // The refresh policy must match the data retention so long-range queries
-    // (7d, 30d, 90d) always find materialized data in the CA.
+    // ── Continuous aggregate refresh policy ──
+    // The periodic policy only needs to cover recent data (3 days) — enough to
+    // handle late-arriving inserts and reprocessing. Historical data (up to 90
+    // days) is seeded once on startup via the explicit CALL below, so the policy
+    // doesn't need to re-scan the entire retention window every 5 minutes.
+    // Previously this was set to 90 days, causing unnecessary memory pressure
+    // as TimescaleDB loaded metadata for all compressed chunks on each refresh.
     let _ = sqlx::query(
         "SELECT remove_continuous_aggregate_policy('metrics_5min', if_not_exists => TRUE)",
     )
@@ -220,7 +224,7 @@ async fn main() -> anyhow::Result<()> {
     .await;
     if let Err(e) = sqlx::query(
         "SELECT add_continuous_aggregate_policy('metrics_5min', \
-             start_offset => INTERVAL '90 days', \
+             start_offset => INTERVAL '3 days', \
              end_offset   => INTERVAL '5 minutes', \
              schedule_interval => INTERVAL '5 minutes', \
              if_not_exists => TRUE)",

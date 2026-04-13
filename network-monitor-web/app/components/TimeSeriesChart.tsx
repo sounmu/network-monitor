@@ -74,16 +74,22 @@ function autoYDomain(
 ): [number, number] | ["auto", "auto"] {
   if (!data.length) return ["auto", "auto"];
 
-  const values = data
-    .map((d) => d[dataKey])
-    .filter((v): v is number => typeof v === "number" && isFinite(v));
+  let min = Infinity;
+  let max = -Infinity;
+  let hasValue = false;
 
-  if (!values.length) return ["auto", "auto"];
+  for (let i = 0; i < data.length; i++) {
+    const v = data[i][dataKey];
+    if (typeof v === "number" && isFinite(v)) {
+      if (v < min) min = v;
+      if (v > max) max = v;
+      hasValue = true;
+    }
+  }
 
-  const min = Math.min(...values);
-  const max = Math.max(...values);
+  if (!hasValue) return ["auto", "auto"];
+
   const range = max - min;
-
   const padding = range < 0.01 ? 0.5 : range * 0.12;
 
   const lower = Math.max(min - padding, minFloor);
@@ -102,16 +108,24 @@ function autoYDomainMulti(
 ): [number, number] | ["auto", "auto"] {
   if (!data.length) return ["auto", "auto"];
 
-  const values = data.flatMap((d) =>
-    dataKeys
-      .map((k) => d[k])
-      .filter((v): v is number => typeof v === "number" && isFinite(v))
-  );
+  let min = Infinity;
+  let max = -Infinity;
+  let hasValue = false;
 
-  if (!values.length) return ["auto", "auto"];
+  for (let i = 0; i < data.length; i++) {
+    const d = data[i];
+    for (let j = 0; j < dataKeys.length; j++) {
+      const v = d[dataKeys[j]];
+      if (typeof v === "number" && isFinite(v)) {
+        if (v < min) min = v;
+        if (v > max) max = v;
+        hasValue = true;
+      }
+    }
+  }
 
-  const min = Math.min(...values);
-  const max = Math.max(...values);
+  if (!hasValue) return ["auto", "auto"];
+
   const range = max - min;
   const padding = range < 0.01 ? 0.5 : range * 0.12;
   const lower = Math.max(min - padding, minFloor);
@@ -315,7 +329,7 @@ export default function TimeSeriesChart({ hostKey }: TimeSeriesChartProps) {
     if (!liveMetrics) return rows;
 
     const lastRestTs = rows.length > 0
-      ? Math.max(...rows.map((r) => new Date(r.timestamp).getTime()))
+      ? new Date(rows[rows.length - 1].timestamp).getTime()
       : 0;
     const liveTs = new Date(liveMetrics.timestamp).getTime();
     if (liveTs <= lastRestTs) return rows;
@@ -415,6 +429,12 @@ export default function TimeSeriesChart({ hostKey }: TimeSeriesChartProps) {
     return { cpuData: cpu, ramData: ram, rxData: rx, txData: tx, loadData: load, sorted: s };
   }, [allRows, loadLabels]);
 
+  // Memoize Y-axis domains — stabilizes array references so MiniChartCard's memo works
+  const { cpuDomain, ramDomain } = useMemo(() => ({
+    cpuDomain: autoYDomain(cpuData, "CPU (%)", 0),
+    ramDomain: autoYDomain(ramData, "RAM (%)", 0),
+  }), [cpuData, ramData]);
+
   // Latest summary: prefer SSE live data, fall back to last item of sorted array
   const latestFromRows = sorted.length > 0 ? sorted[sorted.length - 1] : null;
   const latest = liveMetrics ?? latestFromRows;
@@ -483,7 +503,7 @@ export default function TimeSeriesChart({ hostKey }: TimeSeriesChartProps) {
           dataKey="CPU (%)"
           rangeHours={rangeHours}
           yTickFormatter={fmtPercent}
-          yDomain={autoYDomain(cpuData, "CPU (%)", 0)}
+          yDomain={cpuDomain}
         />
 
         <MiniChartCard
@@ -494,7 +514,7 @@ export default function TimeSeriesChart({ hostKey }: TimeSeriesChartProps) {
           dataKey="RAM (%)"
           rangeHours={rangeHours}
           yTickFormatter={fmtPercent}
-          yDomain={autoYDomain(ramData, "RAM (%)", 0)}
+          yDomain={ramDomain}
         />
 
         <MiniChartCard
@@ -544,7 +564,7 @@ const fmtTxTooltip = (v: number): [string, string] => [formatNetworkSpeed(v), "T
 
 // ─── Sub-components ─────────────────────────
 
-function SummaryCard({
+const SummaryCard = memo(function SummaryCard({
   label,
   value,
   color,
@@ -579,7 +599,7 @@ function SummaryCard({
       </div>
     </div>
   );
-}
+});
 
 function thresholdColor(pct: number, warn = 65, danger = 85): string {
   if (pct >= danger) return "var(--accent-red)";
