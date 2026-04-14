@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: network-monitor-server
+        working-directory: netsentinel-server
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -21,7 +21,7 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: network-monitor-server
+          workspaces: netsentinel-server
       - run: cargo fmt --check
       - run: cargo check
       - run: cargo clippy -- -D warnings
@@ -32,7 +32,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: network-monitor-agent
+        working-directory: netsentinel-agent
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -40,7 +40,7 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: network-monitor-agent
+          workspaces: netsentinel-agent
       - run: cargo fmt --check
       - run: cargo check
       - run: cargo clippy -- -D warnings
@@ -51,14 +51,14 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: network-monitor-web
+        working-directory: netsentinel-web
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
           cache: "npm"
-          cache-dependency-path: network-monitor-web/package-lock.json
+          cache-dependency-path: netsentinel-web/package-lock.json
       - run: npm ci
       - run: npm run lint
       - run: npm test -- --passWithNoTests
@@ -92,12 +92,12 @@ jobs:
             --exclude '.env' \
             --exclude '*.env' \
             -e "ssh -i ~/.ssh/deploy_key" \
-            ./ ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:~/network-monitor/
+            ./ ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:~/netsentinel/
 
       - name: Build & restart on server
         run: |
           ssh -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} << 'EOF'
-            cd ~/network-monitor
+            cd ~/netsentinel
             docker compose up -d --build server web
             docker image prune -f
           EOF
@@ -113,6 +113,6 @@ jobs:
               sleep 2
             done
             echo "❌ Health check failed after 60s"
-            docker compose -f ~/network-monitor/docker-compose.yml logs --tail=30 server
+            docker compose -f ~/netsentinel/docker-compose.yml logs --tail=30 server
             exit 1
           EOF

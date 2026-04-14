@@ -14,6 +14,20 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       POSTGRES_DB: ${POSTGRES_DB:-network_monitor}
+    command:
+      - "postgres"
+      - "-c"
+      - "shared_buffers=1GB"
+      - "-c"
+      - "effective_cache_size=3GB"
+      - "-c"
+      - "work_mem=16MB"
+      - "-c"
+      - "maintenance_work_mem=256MB"
+      - "-c"
+      - "wal_buffers=16MB"
+      - "-c"
+      - "random_page_cost=1.1"
     networks:
       - backend-internal
     healthcheck:
@@ -26,13 +40,13 @@ services:
       resources:
         limits:
           cpus: "1.0"
-          memory: 1G
+          memory: 4G
 
   # 2. Rust backend server
   server:
-    image: ghcr.io/sounmu/network-monitor-server:latest
+    image: ghcr.io/sounmu/netsentinel-server:latest
     build:
-      context: ./network-monitor-server
+      context: ./netsentinel-server
       dockerfile: Dockerfile
     depends_on:
       db:
@@ -44,9 +58,9 @@ services:
         max-size: "10m"
         max-file: "3"
     volumes:
-      - ./network-monitor-server/.env:/app/.env
+      - ./netsentinel-server/.env:/app/.env
     env_file:
-      - ./network-monitor-server/.env
+      - ./netsentinel-server/.env
     environment:
       - DATABASE_URL=postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-network_monitor}
     ports:
@@ -62,9 +76,9 @@ services:
 
   # 3. Next.js frontend (standalone build)
   web:
-    image: ghcr.io/sounmu/network-monitor-web:latest
+    image: ghcr.io/sounmu/netsentinel-web:latest
     build:
-      context: ./network-monitor-web
+      context: ./netsentinel-web
       dockerfile: Dockerfile
       args:
         - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:3000}

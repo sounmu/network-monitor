@@ -1,4 +1,4 @@
-# network-monitor
+# NetSentinel
 
 > Real-time server infrastructure monitoring — lightweight, self-hosted, and zero-trust.
 
@@ -10,7 +10,7 @@
 
 ## Overview
 
-**network-monitor** is a pull-based server monitoring system built with Rust and Next.js. A central server scrapes lightweight agents installed on each target host, stores metrics in TimescaleDB, and streams real-time data to the web dashboard via SSE.
+**NetSentinel** is a pull-based server monitoring system built with Rust and Next.js. A central server scrapes lightweight agents installed on each target host, stores metrics in TimescaleDB, and streams real-time data to the web dashboard via SSE.
 
 **What sets it apart:**
 - **Pull-scraping behind Zero Trust.** The server reaches agents over Cloudflare Tunnel, so hosts behind NAT or a firewall are monitored without opening a single inbound port.
@@ -49,10 +49,10 @@ graph LR
 ## Monorepo Structure
 
 ```
-network-monitor/
-├── network-monitor-server/   # Rust/Axum backend (metrics API, scraper, alerts)
-├── network-monitor-web/      # Next.js frontend dashboard
-└── network-monitor-agent/    # Rust agent daemon
+netsentinel/
+├── netsentinel-server/   # Rust/Axum backend (metrics API, scraper, alerts)
+├── netsentinel-web/      # Next.js frontend dashboard
+└── netsentinel-agent/    # Rust agent daemon
 ```
 
 ---
@@ -66,15 +66,15 @@ network-monitor/
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/sounmu/network-monitor.git
-cd network-monitor
+git clone https://github.com/sounmu/netsentinel.git
+cd netsentinel
 ```
 
 ### 2. Configure environment
 
 ```bash
 cp .env.example .env
-cp network-monitor-server/.env.example network-monitor-server/.env
+cp netsentinel-server/.env.example netsentinel-server/.env
 ```
 
 Edit both `.env` files and fill in:
@@ -103,7 +103,7 @@ The dashboard is available at `http://localhost:3001` (or via your Cloudflare Tu
 ### Server
 
 ```bash
-cd network-monitor-server
+cd netsentinel-server
 cp .env.example .env  # fill in values
 cargo run
 # Runs on http://0.0.0.0:3000 by default
@@ -112,7 +112,7 @@ cargo run
 ### Web Dashboard
 
 ```bash
-cd network-monitor-web
+cd netsentinel-web
 cp .env.example .env  # fill in NEXT_PUBLIC_API_URL
 npm install
 npm run dev
@@ -122,7 +122,7 @@ npm run dev
 ### Agent
 
 ```bash
-cd network-monitor-agent
+cd netsentinel-agent
 cp .env.example .env  # fill in JWT_SECRET matching the server
 cargo run
 # Listens on http://0.0.0.0:9101 by default
@@ -138,11 +138,11 @@ cargo run
 |---|---|---|---|
 | `POSTGRES_USER` | No | `postgres` | DB username |
 | `POSTGRES_PASSWORD` | **Yes** | — | DB password |
-| `POSTGRES_DB` | No | `network_monitor` | DB name |
+| `POSTGRES_DB` | No | `network_monitor` | DB name (kept for backward compat) |
 | `CLOUDFLARE_TUNNEL_TOKEN` | No | — | Cloudflare Tunnel token |
 | `NEXT_PUBLIC_API_URL` | No | `http://localhost:3000` | Backend URL seen by browser |
 
-### Server `network-monitor-server/.env`
+### Server `netsentinel-server/.env`
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
@@ -156,7 +156,7 @@ cargo run
 | `SSE_BUFFER_SIZE` | No | `128` | SSE broadcast channel buffer |
 | `TRUSTED_PROXY_COUNT` | No | `0` | Reverse proxy count for X-Forwarded-For (0 = use peer IP directly) |
 
-### Agent `network-monitor-agent/.env`
+### Agent `netsentinel-agent/.env`
 
 | Variable | Required | Default | Description |
 |---|---|---|---|

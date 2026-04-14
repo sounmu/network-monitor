@@ -1,0 +1,35 @@
+{
+  "name": "netsentinel-web",
+  "version": "1.2.0",
+  "description": "Real-time server monitoring dashboard — Next.js frontend with SSE, charts, and i18n",
+  "license": "Apache-2.0",
+  "repository": "https://github.com/sounmu/netsentinel",
+  "private": true,
+  "scripts": {
+    "dev": "next dev -p 3001",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "lucide-react": "^0.577.0",
+    "next": "16.2.1",
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
+    "recharts": "^3.8.0",
+    "sonner": "^2.0.7",
+    "swr": "^2.4.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.2.1",
+    "tailwindcss": "^4",
+    "typescript": "^5",
+    "vitest": "^4.1.2"
+  }
+}
