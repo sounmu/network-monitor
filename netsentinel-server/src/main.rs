@@ -27,7 +27,7 @@ async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
 
     let _guard = logger::init_tracing();
-    tracing::info!("🚀 Starting network-monitor-server...");
+    tracing::info!("🚀 Starting netsentinel-server...");
 
     // ── Required environment variables ──
     let database_url =

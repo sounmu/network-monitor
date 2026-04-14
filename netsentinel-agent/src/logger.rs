@@ -23,7 +23,7 @@ impl FormatTime for KstTime {
 /// Returns the absolute path to the log directory for the current build mode.
 ///
 /// - **Debug** (`#[cfg(debug_assertions)]`): `./logs/` under the project root
-/// - **Release** (`#[cfg(not(debug_assertions))]`): `/var/log/network-monitor-agent/`
+/// - **Release** (`#[cfg(not(debug_assertions))]`): `/var/log/netsentinel-agent/`
 ///
 /// The directory is created automatically if it does not exist.
 /// If creation fails due to insufficient permissions in release mode,
@@ -36,7 +36,7 @@ pub fn get_log_dir() -> PathBuf {
             eprintln!(
                 "\n\x1b[1;31m[ERROR] Permission denied: cannot create log directory '{}'.\x1b[0m\n\
                  \x1b[33m  → Release mode requires root privileges (sudo).\x1b[0m\n\
-                 \x1b[33m  → Run with: sudo ./network-monitor-agent\x1b[0m\n",
+                 \x1b[33m  → Run with: sudo ./netsentinel-agent\x1b[0m\n",
                 log_dir.display()
             );
             std::process::exit(1);
@@ -61,7 +61,7 @@ fn get_log_dir_path() -> PathBuf {
 
 #[cfg(not(debug_assertions))]
 fn get_log_dir_path() -> PathBuf {
-    PathBuf::from("/var/log/network-monitor-agent")
+    PathBuf::from("/var/log/netsentinel-agent")
 }
 
 // ──────────────────────────────────────────────

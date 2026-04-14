@@ -170,7 +170,7 @@ async fn send_email(config: &serde_json::Value, message: &str) {
     let email = match Message::builder()
         .from(from_addr)
         .to(to_addr)
-        .subject("Network Monitor Alert")
+        .subject("NetSentinel Alert")
         .body(plain_text)
     {
         Ok(e) => e,

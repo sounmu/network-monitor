@@ -12,10 +12,10 @@ echo "📤  [1/2] Syncing source to remote..."
 rsync -avz --delete \
     --exclude 'target/' \
     --exclude '.env' \
-    ./ "${DEPLOY_HOST}":~/network-monitor/network-monitor-server/
+    ./ "${DEPLOY_HOST}":~/netsentinel/netsentinel-server/
 
 # 2. Rebuild and restart via Docker Compose on remote
 echo "🔄  [2/2] Building & deploying (Docker Compose)..."
-ssh "${DEPLOY_HOST}" "cd ~/network-monitor && docker compose up -d --build server"
+ssh "${DEPLOY_HOST}" "cd ~/netsentinel && docker compose up -d --build server"
 
 echo "✨ Deployment complete!"

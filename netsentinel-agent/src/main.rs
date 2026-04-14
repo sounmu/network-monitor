@@ -1,4 +1,4 @@
-//! Network Monitor Agent — HTTP exporter for OS, Docker, and port metrics.
+//! NetSentinel Agent — HTTP exporter for OS, Docker, and port metrics.
 //!
 //! This file is intentionally thin: it wires the submodules together and
 //! runs the Axum server. Collection logic, authentication, and data
@@ -32,7 +32,7 @@ use crate::models::MetricsQuery;
 async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
     let _guard = logger::init_tracing();
-    tracing::info!("Starting network-monitor-agent...");
+    tracing::info!("Starting netsentinel-agent...");
 
     let port: u16 = std::env::var("AGENT_PORT")
         .unwrap_or_else(|_| "9100".to_string())
