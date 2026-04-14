@@ -1,6 +1,6 @@
-# network-monitor-web
+# netsentinel-web
 
-Next.js frontend dashboard for **network-monitor**. Displays real-time CPU, memory, load, port, and Docker container metrics with interactive time-series charts.
+Next.js frontend dashboard for **NetSentinel**. Displays real-time CPU, memory, load, port, and Docker container metrics with interactive time-series charts.
 
 ## Quick Start
 
