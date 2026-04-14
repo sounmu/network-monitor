@@ -515,6 +515,7 @@ async fn handle_down(target: &str, display_name: &str, state: &Arc<AppState>) {
                     processes: vec![],
                     temperatures: vec![],
                     gpus: vec![],
+                    docker_stats: vec![],
                 });
             // Update only the fields that change — reuse existing Vec data (no clone)
             status.is_online = false;

@@ -8,9 +8,17 @@
 use std::time::Duration;
 use sysinfo::{Components, Disks, Networks, System};
 
+#[cfg(target_os = "linux")]
+use std::collections::HashMap;
+#[cfg(target_os = "linux")]
+use std::sync::Mutex;
+#[cfg(target_os = "linux")]
+use std::time::Instant;
+
 use crate::gpu;
 use crate::models::{
-    DiskInfo, LoadAverage, NetworkTotal, ProcessInfo, SysinfoResult, TemperatureInfo,
+    DiskInfo, LoadAverage, NetworkInterfaceInfo, NetworkTotal, ProcessInfo, SysinfoResult,
+    TemperatureInfo,
 };
 
 /// Virtual/dummy interface prefix list.
@@ -34,6 +42,88 @@ const FILTERED_PREFIXES: &[&str] = &[
 
 fn is_physical_interface(name: &str) -> bool {
     !FILTERED_PREFIXES.iter().any(|p| name.starts_with(p))
+}
+
+/// Previous disk I/O counters for delta calculation, keyed by device name.
+#[cfg(target_os = "linux")]
+type DiskIoPrev = HashMap<String, (u64, u64, Instant)>;
+#[cfg(target_os = "linux")]
+static DISK_IO_PREV: Mutex<Option<DiskIoPrev>> = Mutex::new(None);
+
+/// Read disk I/O stats from `/sys/block/{dev}/stat` (Linux only).
+/// Returns (read_bytes, write_bytes) for the given device, or None on non-Linux / error.
+#[cfg(target_os = "linux")]
+fn read_disk_io_bytes(dev_name: &str) -> Option<(u64, u64)> {
+    // sysfs stat format: 11+ space-separated fields
+    // Field 2 (0-indexed): sectors read, Field 6: sectors written
+    // Each sector = 512 bytes
+    let path = format!("/sys/block/{}/stat", dev_name);
+    let content = std::fs::read_to_string(&path).ok()?;
+    let fields: Vec<&str> = content.split_whitespace().collect();
+    if fields.len() < 7 {
+        return None;
+    }
+    let sectors_read: u64 = fields[2].parse().ok()?;
+    let sectors_written: u64 = fields[6].parse().ok()?;
+    Some((sectors_read * 512, sectors_written * 512))
+}
+
+/// Compute per-disk read/write bytes per second using delta from previous sample.
+#[cfg(not(target_os = "linux"))]
+fn compute_disk_io(_dev_name: &str) -> (f64, f64) {
+    (0.0, 0.0)
+}
+
+#[cfg(target_os = "linux")]
+fn compute_disk_io(dev_name: &str) -> (f64, f64) {
+    {
+        let Some((read_bytes, write_bytes)) = read_disk_io_bytes(dev_name) else {
+            return (0.0, 0.0);
+        };
+
+        let now = Instant::now();
+        let mut guard = DISK_IO_PREV.lock().unwrap_or_else(|e| e.into_inner());
+        let prev_map = guard.get_or_insert_with(HashMap::new);
+
+        let result = if let Some((prev_r, prev_w, prev_t)) = prev_map.get(dev_name) {
+            let elapsed = now.duration_since(*prev_t).as_secs_f64();
+            if elapsed > 0.0 {
+                (
+                    read_bytes.saturating_sub(*prev_r) as f64 / elapsed,
+                    write_bytes.saturating_sub(*prev_w) as f64 / elapsed,
+                )
+            } else {
+                (0.0, 0.0)
+            }
+        } else {
+            (0.0, 0.0)
+        };
+
+        prev_map.insert(dev_name.to_string(), (read_bytes, write_bytes, now));
+        result
+    }
+}
+
+/// Extract the block device name from a disk path (e.g., "/dev/sda1" → "sda").
+/// Strips partition number suffix and returns the base device for sysfs lookup.
+fn extract_block_device(disk_name: &str) -> String {
+    let name = disk_name.strip_prefix("/dev/").unwrap_or(disk_name);
+    // Strip trailing digits for partition suffix (sda1 → sda, nvme0n1p1 → nvme0n1)
+    if name.starts_with("nvme") {
+        // NVMe: nvme0n1p1 → nvme0n1 (let chain: collapsible if)
+        if let Some(idx) = name.rfind('p')
+            && name[idx + 1..].chars().all(|c| c.is_ascii_digit())
+            && idx > 0
+        {
+            name[..idx].to_string()
+        } else {
+            name.to_string()
+        }
+    } else {
+        // SATA/SCSI: sda1 → sda
+        name.trim_end_matches(|c: char| c.is_ascii_digit())
+            .to_string()
+    }
 }
 
 #[tracing::instrument]
@@ -67,6 +157,7 @@ pub(crate) async fn collect_sysinfo() -> SysinfoResult {
         sys.refresh_memory();
 
         let cpu_usage = sys.global_cpu_usage();
+        let cpu_cores: Vec<f32> = sys.cpus().iter().map(|c| c.cpu_usage()).collect();
         let memory_total_mb = sys.total_memory() / 1024 / 1024;
         let memory_used_mb = sys.used_memory() / 1024 / 1024;
         let memory_usage_percent = if sys.total_memory() > 0 {
@@ -75,7 +166,7 @@ pub(crate) async fn collect_sysinfo() -> SysinfoResult {
             0.0
         };
 
-        // Disks
+        // Disks (capacity + I/O)
         let disks_raw = Disks::new_with_refreshed_list();
         let disks = disks_raw
             .iter()
@@ -83,6 +174,8 @@ pub(crate) async fn collect_sysinfo() -> SysinfoResult {
                 let total_bytes = disk.total_space();
                 let available_bytes = disk.available_space();
                 let used_bytes = total_bytes.saturating_sub(available_bytes);
+                let dev_name = extract_block_device(&disk.name().to_string_lossy());
+                let (read_bps, write_bps) = compute_disk_io(&dev_name);
                 DiskInfo {
                     name: disk.name().to_string_lossy().into_owned(),
                     mount_point: disk.mount_point().to_string_lossy().into_owned(),
@@ -93,20 +186,27 @@ pub(crate) async fn collect_sysinfo() -> SysinfoResult {
                     } else {
                         0.0
                     },
+                    read_bytes_per_sec: read_bps,
+                    write_bytes_per_sec: write_bps,
                 }
             })
             .collect();
 
-        // Aggregate physical interface traffic.
+        // Aggregate physical interface traffic + per-interface breakdown.
         let nets = Networks::new_with_refreshed_list();
-        let network = nets
-            .iter()
-            .filter(|(name, _)| is_physical_interface(name))
-            .fold(NetworkTotal::default(), |mut acc, (_, data)| {
-                acc.total_rx_bytes += data.total_received();
-                acc.total_tx_bytes += data.total_transmitted();
-                acc
+        let mut network = NetworkTotal::default();
+        let mut network_interfaces = Vec::new();
+        for (name, data) in nets.iter().filter(|(name, _)| is_physical_interface(name)) {
+            let rx = data.total_received();
+            let tx = data.total_transmitted();
+            network.total_rx_bytes += rx;
+            network.total_tx_bytes += tx;
+            network_interfaces.push(NetworkInterfaceInfo {
+                name: name.to_string(),
+                rx_bytes: rx,
+                tx_bytes: tx,
             });
+        }
 
         // Load average (Linux/macOS — returns 0.0 on Windows)
         let la = System::load_average();
@@ -153,6 +253,7 @@ pub(crate) async fn collect_sysinfo() -> SysinfoResult {
 
         (
             cpu_usage,
+            cpu_cores,
             memory_total_mb,
             memory_used_mb,
             memory_usage_percent,
@@ -160,6 +261,7 @@ pub(crate) async fn collect_sysinfo() -> SysinfoResult {
             process_list,
             temperatures,
             network,
+            network_interfaces,
             load_average,
         )
     });
@@ -172,6 +274,7 @@ pub(crate) async fn collect_sysinfo() -> SysinfoResult {
     });
     let (
         cpu_usage,
+        cpu_cores,
         memory_total_mb,
         memory_used_mb,
         memory_usage_percent,
@@ -179,11 +282,13 @@ pub(crate) async fn collect_sysinfo() -> SysinfoResult {
         processes,
         temperatures,
         network,
+        network_interfaces,
         load_average,
     ) = sys_result.unwrap_or_else(|e| {
         tracing::error!(err = ?e, "❌ [Sysinfo] spawn_blocking panicked, returning defaults");
         (
             0.0,
+            vec![],
             0,
             0,
             0.0,
@@ -194,6 +299,7 @@ pub(crate) async fn collect_sysinfo() -> SysinfoResult {
                 total_rx_bytes: 0,
                 total_tx_bytes: 0,
             },
+            vec![],
             LoadAverage {
                 one_min: 0.0,
                 five_min: 0.0,
@@ -204,6 +310,7 @@ pub(crate) async fn collect_sysinfo() -> SysinfoResult {
 
     SysinfoResult {
         cpu_usage,
+        cpu_cores,
         memory_total_mb,
         memory_used_mb,
         memory_usage_percent,
@@ -212,6 +319,7 @@ pub(crate) async fn collect_sysinfo() -> SysinfoResult {
         temperatures,
         gpus,
         network,
+        network_interfaces,
         load_average,
     }
 }

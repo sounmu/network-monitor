@@ -72,6 +72,7 @@ impl AppState {
                     processes: vec![],
                     temperatures: vec![],
                     gpus: vec![],
+                    docker_stats: vec![],
                 });
         }
     }
@@ -159,6 +160,8 @@ pub struct HostRecord {
     pub alert_history: VecDeque<AlertMetricPoint>,
     pub alert_state: AlertState,
     pub network_prev: Option<(u64, u64, Instant)>,
+    /// Per-interface previous byte counters for rate calculation
+    pub network_interface_prev: HashMap<String, (u64, u64, Instant)>,
     pub prev_status_hash: Option<u64>,
     pub last_status_sent: Option<Instant>,
 }
@@ -170,6 +173,7 @@ impl HostRecord {
             alert_history: VecDeque::new(),
             alert_state: AlertState::new(),
             network_prev: None,
+            network_interface_prev: HashMap::new(),
             prev_status_hash: None,
             last_status_sent: None,
         }

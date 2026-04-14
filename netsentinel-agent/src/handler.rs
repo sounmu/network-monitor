@@ -6,15 +6,16 @@ use axum::response::{IntoResponse, Response};
 use chrono::Utc;
 use chrono_tz::Asia::Seoul;
 
-use crate::docker_cache::{DockerCache, read_docker_cache};
+use crate::docker_cache::{DockerCache, DockerStatsCache, read_docker_cache, read_docker_stats};
 use crate::models::{AgentMetrics, MetricsQuery, SystemMetrics};
 use crate::ports::{collect_ports, parse_comma_separated_ports};
 use crate::sysinfo_collector::collect_sysinfo;
 
-#[tracing::instrument(skip(docker_cache, query))]
+#[tracing::instrument(skip(docker_cache, docker_stats_cache, query))]
 pub(crate) async fn metrics_handler(
     hostname: String,
     docker_cache: DockerCache,
+    docker_stats_cache: DockerStatsCache,
     query: Query<MetricsQuery>,
 ) -> Response {
     // Ports are managed server-side and sent via query param
@@ -33,10 +34,11 @@ pub(crate) async fn metrics_handler(
     // and Docker cache read in parallel. Docker state is served from the in-memory
     // cache (no HTTP I/O), but including it in the join hides any read-lock contention
     // with the background Docker event listener behind the sysinfo sleep.
-    let (sys_result, port_statuses, docker_containers) = tokio::join!(
+    let (sys_result, port_statuses, docker_containers, docker_stats) = tokio::join!(
         collect_sysinfo(),
         collect_ports(monitor_ports),
         read_docker_cache(&docker_cache, target_containers),
+        read_docker_stats(&docker_stats_cache),
     );
 
     let timestamp = Utc::now()
@@ -72,6 +74,9 @@ pub(crate) async fn metrics_handler(
         docker: docker_containers,
         ports: port_statuses,
         agent_version: env!("CARGO_PKG_VERSION").to_string(),
+        cpu_cores: sys_result.cpu_cores,
+        network_interfaces: sys_result.network_interfaces,
+        docker_stats,
     };
 
     // bincode binary serialisation: ~40–70% smaller payload than JSON, near-zero-copy parsing

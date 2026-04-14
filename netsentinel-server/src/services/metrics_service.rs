@@ -5,11 +5,13 @@ use std::time::{Duration, Instant};
 use chrono::{SecondsFormat, Utc};
 
 use crate::errors::AppError;
-use crate::models::agent_metrics::{AgentMetrics, NetworkTotal};
+use crate::models::agent_metrics::{AgentMetrics, NetworkInterfaceInfo, NetworkTotal};
 use crate::models::app_state::{
     AlertConfig, AlertMetricPoint, AppState, HostRecord, MetricAlertRule,
 };
-use crate::models::sse_payloads::{HostMetricsPayload, HostStatusPayload, NetworkRate};
+use crate::models::sse_payloads::{
+    HostMetricsPayload, HostStatusPayload, NetworkInterfaceRate, NetworkRate,
+};
 
 /// How long to retain in-memory metric history (10 minutes)
 const HISTORY_RETENTION_SECS: u64 = 10 * 60;
@@ -215,8 +217,12 @@ pub async fn process_metrics(
         record.push_alert_point(point, Duration::from_secs(HISTORY_RETENTION_SECS));
         let history_count = record.alert_history.len();
 
-        // ── Compute per-second network throughput ──
+        // ── Compute per-second network throughput (aggregate + per-interface) ──
         let network_rate = compute_network_rate(&metrics.network, &mut record.network_prev);
+        let network_interface_rates = compute_interface_rates(
+            &metrics.network_interfaces,
+            &mut record.network_interface_prev,
+        );
 
         // ── Determine if status SSE payload is needed (decision only, no allocation) ──
         let new_hash = compute_status_hash(
@@ -247,6 +253,8 @@ pub async fn process_metrics(
             load_5min: metrics.load_average.five_min,
             load_15min: metrics.load_average.fifteen_min,
             network_rate,
+            cpu_cores: metrics.cpu_cores.clone(),
+            network_interface_rates,
             timestamp: server_ts.clone(),
         };
 
@@ -277,6 +285,7 @@ pub async fn process_metrics(
             processes: metrics.system.processes.clone(),
             temperatures: metrics.system.temperatures.clone(),
             gpus: metrics.system.gpus.clone(),
+            docker_stats: metrics.docker_stats.clone(),
         })
     } else {
         None
@@ -353,6 +362,43 @@ fn compute_network_rate(
     };
     *prev = Some((network.total_rx_bytes, network.total_tx_bytes, now));
     rate
+}
+
+/// Convert per-interface cumulative byte counters into per-second rates.
+/// Same delta pattern as `compute_network_rate`, but applied per-interface.
+fn compute_interface_rates(
+    interfaces: &[NetworkInterfaceInfo],
+    prev_map: &mut std::collections::HashMap<String, (u64, u64, Instant)>,
+) -> Vec<NetworkInterfaceRate> {
+    let now = Instant::now();
+    let mut rates = Vec::with_capacity(interfaces.len());
+    for iface in interfaces {
+        let rate = if let Some((prev_rx, prev_tx, prev_time)) = prev_map.get(&iface.name) {
+            let elapsed = now.duration_since(*prev_time).as_secs_f64();
+            if elapsed > 0.0 {
+                NetworkInterfaceRate {
+                    name: iface.name.clone(),
+                    rx_bytes_per_sec: iface.rx_bytes.saturating_sub(*prev_rx) as f64 / elapsed,
+                    tx_bytes_per_sec: iface.tx_bytes.saturating_sub(*prev_tx) as f64 / elapsed,
+                }
+            } else {
+                NetworkInterfaceRate {
+                    name: iface.name.clone(),
+                    rx_bytes_per_sec: 0.0,
+                    tx_bytes_per_sec: 0.0,
+                }
+            }
+        } else {
+            NetworkInterfaceRate {
+                name: iface.name.clone(),
+                rx_bytes_per_sec: 0.0,
+                tx_bytes_per_sec: 0.0,
+            }
+        };
+        prev_map.insert(iface.name.clone(), (iface.rx_bytes, iface.tx_bytes, now));
+        rates.push(rate);
+    }
+    rates
 }
 
 // ──────────────────────────────────────────────
@@ -712,6 +758,9 @@ mod tests {
             docker_containers: vec![],
             ports,
             agent_version: "0.1.0".to_string(),
+            cpu_cores: vec![],
+            network_interfaces: vec![],
+            docker_stats: vec![],
         }
     }
 

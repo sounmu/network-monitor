@@ -14,6 +14,8 @@ import DiskUsageBar from "@/app/components/DiskUsageBar";
 import ProcessTable from "@/app/components/ProcessTable";
 import TemperatureDisplay from "@/app/components/TemperatureDisplay";
 import GpuCard from "@/app/components/GpuCard";
+import CpuCoreGrid from "@/app/components/CpuCoreGrid";
+import NetworkInterfaceTable from "@/app/components/NetworkInterfaceTable";
 import {
   getHostStatus,
   STATUS_BADGE_CLASS,
@@ -100,11 +102,14 @@ export default function HostPage({ params }: Props) {
     : null;
 
   const docker = statusData?.docker_containers ?? [];
+  const dockerStats = statusData?.docker_stats ?? [];
   const ports = statusData?.ports ?? [];
   const disks = statusData?.disks ?? [];
   const processes = statusData?.processes ?? [];
   const temperatures = statusData?.temperatures ?? [];
   const gpus = statusData?.gpus ?? [];
+  const cpuCores = liveMetrics?.cpu_cores ?? [];
+  const networkInterfaces = liveMetrics?.network_interface_rates ?? [];
   const latestTimestamp = liveMetrics?.timestamp ?? statusData?.last_seen ?? null;
 
   return (
@@ -238,6 +243,35 @@ export default function HostPage({ params }: Props) {
             </SectionCard>
           </div>
 
+          {/* CPU Cores + Network Interfaces */}
+          {(cpuCores.length > 0 || networkInterfaces.length > 0) && (
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
+                gap: 16,
+                marginBottom: 16,
+              }}
+            >
+              {cpuCores.length > 0 && (
+                <SectionCard
+                  title={`${t.cpuCores.title} (${cpuCores.length})`}
+                  icon={<Cpu size={15} />}
+                >
+                  <CpuCoreGrid cores={cpuCores} />
+                </SectionCard>
+              )}
+              {networkInterfaces.length > 0 && (
+                <SectionCard
+                  title={`${t.networkInterfaces.title} (${networkInterfaces.length})`}
+                  icon={<Network size={15} />}
+                >
+                  <NetworkInterfaceTable interfaces={networkInterfaces} />
+                </SectionCard>
+              )}
+            </div>
+          )}
+
           {/* Disk + Processes grid */}
           <div
             style={{
@@ -297,7 +331,7 @@ export default function HostPage({ params }: Props) {
               title={`${t.host.dockerContainers} (${docker.length})`}
               icon={<Layers size={15} />}
             >
-              <DockerGrid containers={docker} />
+              <DockerGrid containers={docker} stats={dockerStats} />
             </SectionCard>
           </div>
         </>

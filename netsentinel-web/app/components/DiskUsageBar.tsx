@@ -2,6 +2,7 @@
 
 import { HardDrive } from "lucide-react";
 import { DiskInfo } from "@/app/types/metrics";
+import { formatNetworkSpeed } from "@/app/lib/formatters";
 import { useI18n } from "@/app/i18n/I18nContext";
 
 interface DiskUsageBarProps {
@@ -100,7 +101,7 @@ export default function DiskUsageBar({ disks }: DiskUsageBarProps) {
               />
             </div>
 
-            {/* Footer: used / total */}
+            {/* Footer: used / total + I/O speeds */}
             <div
               style={{
                 display: "flex",
@@ -117,6 +118,28 @@ export default function DiskUsageBar({ disks }: DiskUsageBarProps) {
                 {t.disk.free}: {formatSize(disk.available_gb)} / {t.disk.total}: {formatSize(disk.total_gb)}
               </span>
             </div>
+            {(disk.read_bytes_per_sec > 0 || disk.write_bytes_per_sec > 0) && (
+              <div
+                style={{
+                  display: "flex",
+                  gap: 12,
+                  marginTop: 4,
+                  fontSize: 11,
+                  color: "var(--text-muted)",
+                }}
+              >
+                <span>
+                  R: <span style={{ color: "var(--accent-green)", fontFamily: "var(--font-mono), monospace" }}>
+                    {formatNetworkSpeed(disk.read_bytes_per_sec)}
+                  </span>
+                </span>
+                <span>
+                  W: <span style={{ color: "var(--accent-blue)", fontFamily: "var(--font-mono), monospace" }}>
+                    {formatNetworkSpeed(disk.write_bytes_per_sec)}
+                  </span>
+                </span>
+              </div>
+            )}
           </div>
         );
       })}

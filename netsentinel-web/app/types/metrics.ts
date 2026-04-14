@@ -30,6 +30,29 @@ export interface DiskInfo {
   total_gb: number;
   available_gb: number;
   usage_percent: number;
+  read_bytes_per_sec: number;
+  write_bytes_per_sec: number;
+}
+
+export interface NetworkInterfaceInfo {
+  name: string;
+  rx_bytes: number;
+  tx_bytes: number;
+}
+
+export interface NetworkInterfaceRate {
+  name: string;
+  rx_bytes_per_sec: number;
+  tx_bytes_per_sec: number;
+}
+
+export interface DockerContainerStats {
+  container_name: string;
+  cpu_percent: number;
+  memory_usage_mb: number;
+  memory_limit_mb: number;
+  net_rx_bytes: number;
+  net_tx_bytes: number;
 }
 
 // Each row in the GET /api/metrics/:host_key response
@@ -53,6 +76,9 @@ export interface MetricsRow {
   processes: ProcessInfo[] | null;
   temperatures: TemperatureInfo[] | null;
   gpus: GpuInfo[] | null;
+  cpu_cores: number[] | null;
+  network_interfaces: NetworkInterfaceInfo[] | null;
+  docker_stats: DockerContainerStats[] | null;
   timestamp: string;
 }
 
@@ -91,6 +117,8 @@ export interface HostMetricsPayload {
   load_5min: number;
   load_15min: number;
   network_rate: NetworkRate;
+  cpu_cores: number[];
+  network_interface_rates: NetworkInterfaceRate[];
   timestamp: string;
 }
 
@@ -108,6 +136,7 @@ export interface HostStatusPayload {
   processes: ProcessInfo[];
   temperatures: TemperatureInfo[];
   gpus: GpuInfo[];
+  docker_stats: DockerContainerStats[];
 }
 
 export interface ProcessInfo {

@@ -171,6 +171,18 @@ export const translations = {
     dockerGrid: {
       noContainers: "No running containers",
     },
+    // CpuCoreGrid
+    cpuCores: {
+      title: "CPU Cores",
+      core: "Core",
+    },
+    // NetworkInterfaceTable
+    networkInterfaces: {
+      title: "Network Interfaces",
+      interface: "Interface",
+      rx: "RX",
+      tx: "TX",
+    },
     // Chart / TimeSeriesChart
     chart: {
       presets: {
@@ -451,6 +463,16 @@ export const translations = {
     },
     dockerGrid: {
       noContainers: "실행 중인 컨테이너 없음",
+    },
+    cpuCores: {
+      title: "CPU 코어",
+      core: "코어",
+    },
+    networkInterfaces: {
+      title: "네트워크 인터페이스",
+      interface: "인터페이스",
+      rx: "수신",
+      tx: "송신",
     },
     // Chart / TimeSeriesChart
     chart: {

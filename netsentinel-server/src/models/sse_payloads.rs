@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::models::agent_metrics::{
-    DiskInfo, DockerContainer, GpuInfo, PortStatus, ProcessInfo, TemperatureInfo,
+    DiskInfo, DockerContainer, DockerContainerStats, GpuInfo, PortStatus, ProcessInfo,
+    TemperatureInfo,
 };
 
 /// Network throughput per second — computed server-side as a delta of cumulative byte counters.
@@ -11,6 +12,14 @@ use crate::models::agent_metrics::{
 /// - Reduces SSE payload size.
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct NetworkRate {
+    pub rx_bytes_per_sec: f64,
+    pub tx_bytes_per_sec: f64,
+}
+
+/// Per-interface network throughput (bytes/sec), computed server-side as a delta.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct NetworkInterfaceRate {
+    pub name: String,
     pub rx_bytes_per_sec: f64,
     pub tx_bytes_per_sec: f64,
 }
@@ -30,6 +39,10 @@ pub struct HostMetricsPayload {
     pub load_15min: f64,
     /// Aggregate throughput across all physical interfaces (bytes/sec)
     pub network_rate: NetworkRate,
+    /// Per-core CPU usage percentages
+    pub cpu_cores: Vec<f32>,
+    /// Per-interface throughput (bytes/sec)
+    pub network_interface_rates: Vec<NetworkInterfaceRate>,
     pub timestamp: String,
 }
 
@@ -49,6 +62,7 @@ pub struct HostStatusPayload {
     pub processes: Vec<ProcessInfo>,
     pub temperatures: Vec<TemperatureInfo>,
     pub gpus: Vec<GpuInfo>,
+    pub docker_stats: Vec<DockerContainerStats>,
 }
 
 /// Event variants delivered to SSE handlers via a `tokio::sync::broadcast` channel

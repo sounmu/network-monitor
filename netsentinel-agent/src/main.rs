@@ -24,7 +24,9 @@ use sysinfo::System;
 use tokio::net::TcpListener;
 use tokio::sync::RwLock;
 
-use crate::docker_cache::{DockerCache, docker_event_listener, initial_docker_load};
+use crate::docker_cache::{
+    DockerCache, DockerStatsCache, docker_event_listener, docker_stats_poller, initial_docker_load,
+};
 use crate::handler::metrics_handler;
 use crate::models::MetricsQuery;
 
@@ -58,10 +60,20 @@ async fn main() -> anyhow::Result<()> {
         },
     ));
 
+    // Container resource stats cache (CPU%, memory, network per container).
+    let docker_stats_cache: DockerStatsCache =
+        Arc::new(RwLock::new(std::collections::HashMap::new()));
+
     // Spawn the Docker Events API listener as a background task.
     // Incrementally updates the cache only when container lifecycle events fire —
     // far cheaper than periodic polling.
     let docker_handle = tokio::spawn(docker_event_listener(docker_cache.clone()));
+
+    // Spawn the container stats poller — polls resource usage every 10s via one-shot stats API.
+    let stats_handle = tokio::spawn(docker_stats_poller(
+        docker_cache.clone(),
+        docker_stats_cache.clone(),
+    ));
 
     // Compress /metrics responses when the caller advertises Accept-Encoding: gzip.
     // bincode is already binary but repeated strings (process names, container images,
@@ -77,8 +89,10 @@ async fn main() -> anyhow::Result<()> {
             get({
                 let hostname = hostname.clone();
                 let cache = docker_cache.clone();
+                let stats_cache = docker_stats_cache.clone();
                 move |query: Query<MetricsQuery>| async move {
-                    metrics_handler(hostname.clone(), cache.clone(), query).await
+                    metrics_handler(hostname.clone(), cache.clone(), stats_cache.clone(), query)
+                        .await
                 }
             }),
         )
@@ -121,6 +135,7 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::info!("🛑 Shutting down agent...");
     docker_handle.abort();
+    stats_handle.abort();
     tracing::info!("✅ Agent shutdown complete.");
 
     Ok(())

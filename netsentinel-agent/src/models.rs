@@ -25,6 +25,12 @@ pub(crate) struct AgentMetrics {
     pub ports: Vec<PortStatus>,
     /// Agent binary version (from Cargo.toml at build time)
     pub agent_version: String,
+    /// Per-core CPU usage percentages (index = core index)
+    pub cpu_cores: Vec<f32>,
+    /// Per-interface network traffic (physical interfaces only)
+    pub network_interfaces: Vec<NetworkInterfaceInfo>,
+    /// Per-container resource metrics (CPU, memory, network)
+    pub docker_stats: Vec<DockerContainerStats>,
 }
 
 #[derive(Serialize)]
@@ -46,6 +52,8 @@ pub(crate) struct DiskInfo {
     pub total_gb: f64,
     pub available_gb: f64,
     pub usage_percent: f32,
+    pub read_bytes_per_sec: f64,
+    pub write_bytes_per_sec: f64,
 }
 
 #[derive(Serialize)]
@@ -101,6 +109,25 @@ pub(crate) struct DockerContainer {
     pub status: String,
 }
 
+/// Per-interface network traffic (cumulative bytes).
+#[derive(Serialize, Clone)]
+pub(crate) struct NetworkInterfaceInfo {
+    pub name: String,
+    pub rx_bytes: u64,
+    pub tx_bytes: u64,
+}
+
+/// Per-container resource usage snapshot.
+#[derive(Serialize, Clone)]
+pub(crate) struct DockerContainerStats {
+    pub container_name: String,
+    pub cpu_percent: f32,
+    pub memory_usage_mb: u64,
+    pub memory_limit_mb: u64,
+    pub net_rx_bytes: u64,
+    pub net_tx_bytes: u64,
+}
+
 #[derive(Serialize)]
 pub(crate) struct PortStatus {
     pub port: u16,
@@ -112,6 +139,7 @@ pub(crate) struct PortStatus {
 /// response from multiple parallel sources.
 pub(crate) struct SysinfoResult {
     pub cpu_usage: f32,
+    pub cpu_cores: Vec<f32>,
     pub memory_total_mb: u64,
     pub memory_used_mb: u64,
     pub memory_usage_percent: f32,
@@ -120,6 +148,7 @@ pub(crate) struct SysinfoResult {
     pub temperatures: Vec<TemperatureInfo>,
     pub gpus: Vec<GpuInfo>,
     pub network: NetworkTotal,
+    pub network_interfaces: Vec<NetworkInterfaceInfo>,
     pub load_average: LoadAverage,
 }
 
@@ -200,6 +229,8 @@ mod tests {
             total_gb: 500.0,
             available_gb: 200.0,
             usage_percent: 60.0,
+            read_bytes_per_sec: 1024.0,
+            write_bytes_per_sec: 512.0,
         };
         let json = serde_json::to_value(&disk).unwrap();
         assert_eq!(json["name"], "sda1");
@@ -254,6 +285,9 @@ mod tests {
                 is_open: true,
             }],
             agent_version: "1.0.0".into(),
+            cpu_cores: vec![45.5, 30.0],
+            network_interfaces: vec![],
+            docker_stats: vec![],
         };
         let encoded = bincode::serialize(&metrics).unwrap();
         assert!(!encoded.is_empty());

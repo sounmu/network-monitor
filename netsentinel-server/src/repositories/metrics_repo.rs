@@ -310,7 +310,8 @@ pub async fn insert_metrics_batch(
          cpu_usage_percent, memory_usage_percent, \
          load_1min, load_5min, load_15min, \
          networks, docker_containers, ports, disks, \
-         processes, temperatures, gpus) ",
+         processes, temperatures, gpus, \
+         cpu_cores, network_interfaces, docker_stats) ",
     );
 
     qb.push_values(batch, |mut b, (host_key, metrics)| {
@@ -328,7 +329,10 @@ pub async fn insert_metrics_batch(
             .push_bind(sqlx::types::Json(&metrics.system.disks))
             .push_bind(sqlx::types::Json(&metrics.system.processes))
             .push_bind(sqlx::types::Json(&metrics.system.temperatures))
-            .push_bind(sqlx::types::Json(&metrics.system.gpus));
+            .push_bind(sqlx::types::Json(&metrics.system.gpus))
+            .push_bind(sqlx::types::Json(&metrics.cpu_cores))
+            .push_bind(sqlx::types::Json(&metrics.network_interfaces))
+            .push_bind(sqlx::types::Json(&metrics.docker_stats));
     });
 
     qb.build().execute(pool).await?;
@@ -391,6 +395,9 @@ pub struct MetricsRow {
     pub processes: Option<Value>,
     pub temperatures: Option<Value>,
     pub gpus: Option<Value>,
+    pub cpu_cores: Option<Value>,
+    pub network_interfaces: Option<Value>,
+    pub docker_stats: Option<Value>,
     #[serde(with = "kst_date_format")]
     pub timestamp: DateTime<Utc>,
 }
@@ -407,6 +414,7 @@ pub async fn fetch_recent_metrics(
                load_1min, load_5min, load_15min,
                networks, docker_containers, ports, disks,
                processes, temperatures, gpus,
+               cpu_cores, network_interfaces, docker_stats,
                timestamp
         FROM metrics
         WHERE host_key = $1
@@ -457,6 +465,7 @@ pub async fn fetch_metrics_range(
                    NULL::jsonb AS processes,
                    NULL::jsonb AS temperatures,
                    NULL::jsonb AS gpus,
+                   cpu_cores, network_interfaces, docker_stats,
                    timestamp
             FROM metrics
             WHERE host_key = $1
@@ -494,6 +503,9 @@ pub async fn fetch_metrics_range(
                 NULL::jsonb AS processes,
                 NULL::jsonb AS temperatures,
                 NULL::jsonb AS gpus,
+                NULL::jsonb AS cpu_cores,
+                NULL::jsonb AS network_interfaces,
+                NULL::jsonb AS docker_stats,
                 bucket AS timestamp
             FROM metrics_5min
             WHERE host_key = $1
@@ -533,6 +545,9 @@ pub async fn fetch_metrics_range(
                 NULL::jsonb AS processes,
                 NULL::jsonb AS temperatures,
                 NULL::jsonb AS gpus,
+                NULL::jsonb AS cpu_cores,
+                NULL::jsonb AS network_interfaces,
+                NULL::jsonb AS docker_stats,
                 time_bucket('15 minutes', bucket) AS timestamp
             FROM metrics_5min
             WHERE host_key = $1

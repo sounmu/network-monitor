@@ -351,6 +351,9 @@ export default function TimeSeriesChart({ hostKey }: TimeSeriesChartProps) {
       processes: null,
       temperatures: null,
       gpus: null,
+      cpu_cores: null,
+      network_interfaces: null,
+      docker_stats: null,
       timestamp: liveMetrics.timestamp,
     };
     return [...rows, syntheticRow];

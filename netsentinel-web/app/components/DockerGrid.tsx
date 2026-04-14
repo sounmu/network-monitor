@@ -1,14 +1,16 @@
 "use client";
 
-import { DockerContainer } from "@/app/types/metrics";
+import { DockerContainer, DockerContainerStats } from "@/app/types/metrics";
 import { Box, Cpu } from "lucide-react";
 import { useI18n } from "@/app/i18n/I18nContext";
+import { formatNetworkSpeed } from "@/app/lib/formatters";
 
 interface DockerGridProps {
   containers: DockerContainer[];
+  stats?: DockerContainerStats[];
 }
 
-export default function DockerGrid({ containers }: DockerGridProps) {
+export default function DockerGrid({ containers, stats }: DockerGridProps) {
   const { t } = useI18n();
   if (containers.length === 0) {
     return (
@@ -36,6 +38,7 @@ export default function DockerGrid({ containers }: DockerGridProps) {
     >
       {containers.map((c, idx) => {
         const isRunning = c.state === "running";
+        const stat = stats?.find((s) => s.container_name === c.container_name);
         return (
           <div
             key={idx}
@@ -137,6 +140,44 @@ export default function DockerGrid({ containers }: DockerGridProps) {
                 {c.status}
               </span>
             </div>
+            {stat && isRunning && (
+              <div
+                style={{
+                  marginTop: 8,
+                  paddingTop: 8,
+                  borderTop: `1px solid ${isRunning ? "var(--badge-online-border)" : "var(--border-color)"}`,
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: "4px 12px",
+                  fontSize: 11,
+                  color: "var(--text-muted)",
+                  fontFamily: "var(--font-mono), monospace",
+                }}
+              >
+                <span>
+                  CPU{" "}
+                  <span style={{ color: stat.cpu_percent > 80 ? "var(--accent-red)" : "var(--text-primary)", fontWeight: 600 }}>
+                    {stat.cpu_percent.toFixed(1)}%
+                  </span>
+                </span>
+                <span>
+                  MEM{" "}
+                  <span style={{ color: "var(--text-primary)", fontWeight: 600 }}>
+                    {stat.memory_usage_mb}/{stat.memory_limit_mb}MB
+                  </span>
+                </span>
+                <span>
+                  NET{" "}
+                  <span style={{ color: "var(--accent-green)" }}>
+                    {formatNetworkSpeed(stat.net_rx_bytes)}
+                  </span>
+                  {" / "}
+                  <span style={{ color: "var(--accent-blue)" }}>
+                    {formatNetworkSpeed(stat.net_tx_bytes)}
+                  </span>
+                </span>
+              </div>
+            )}
           </div>
         );
       })}

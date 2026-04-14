@@ -20,6 +20,12 @@ pub struct AgentMetrics {
     /// Agent binary version (e.g. "0.1.0"). Empty string for older agents without this field.
     #[serde(default)]
     pub agent_version: String,
+    /// Per-core CPU usage percentages (index = core index)
+    pub cpu_cores: Vec<f32>,
+    /// Per-interface network traffic (physical interfaces only)
+    pub network_interfaces: Vec<NetworkInterfaceInfo>,
+    /// Per-container resource metrics
+    pub docker_stats: Vec<DockerContainerStats>,
 }
 
 /// System resource metrics (CPU, RAM, disk, processes, temperatures, GPUs)
@@ -38,7 +44,7 @@ pub struct SystemMetrics {
     pub gpus: Vec<GpuInfo>,
 }
 
-/// Per-disk information
+/// Per-disk information (capacity + I/O throughput)
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct DiskInfo {
     pub name: String,
@@ -46,6 +52,8 @@ pub struct DiskInfo {
     pub total_gb: f64,
     pub available_gb: f64,
     pub usage_percent: f32,
+    pub read_bytes_per_sec: f64,
+    pub write_bytes_per_sec: f64,
 }
 
 /// Top process by resource usage
@@ -103,6 +111,25 @@ pub struct DockerContainer {
     pub image: String,
     pub state: String,  // "running", "exited", "dead", etc.
     pub status: String, // human-readable status string, e.g. "Up 2 hours"
+}
+
+/// Per-interface network traffic (cumulative bytes)
+#[derive(Deserialize, Serialize, Debug, Clone)]
+pub struct NetworkInterfaceInfo {
+    pub name: String,
+    pub rx_bytes: u64,
+    pub tx_bytes: u64,
+}
+
+/// Per-container resource usage snapshot
+#[derive(Deserialize, Serialize, Debug, Clone)]
+pub struct DockerContainerStats {
+    pub container_name: String,
+    pub cpu_percent: f32,
+    pub memory_usage_mb: u64,
+    pub memory_limit_mb: u64,
+    pub net_rx_bytes: u64,
+    pub net_tx_bytes: u64,
 }
 
 /// Local port open/closed status
