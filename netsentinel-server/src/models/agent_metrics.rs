@@ -1,5 +1,16 @@
 use serde::{Deserialize, Serialize};
 
+/// Static system information returned by the agent's `GET /system-info` endpoint.
+/// Fetched on reconnection and every 24 hours.
+#[derive(Deserialize, Debug, Clone)]
+pub struct SystemInfoResponse {
+    pub os: String,
+    pub cpu_model: String,
+    pub memory_total_mb: u64,
+    pub boot_time: u64,
+    pub ip_address: String,
+}
+
 /// Top-level struct for metric data sent by agents
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct AgentMetrics {
@@ -21,10 +32,13 @@ pub struct AgentMetrics {
     #[serde(default)]
     pub agent_version: String,
     /// Per-core CPU usage percentages (index = core index)
+    #[serde(default)]
     pub cpu_cores: Vec<f32>,
     /// Per-interface network traffic (physical interfaces only)
+    #[serde(default)]
     pub network_interfaces: Vec<NetworkInterfaceInfo>,
     /// Per-container resource metrics
+    #[serde(default)]
     pub docker_stats: Vec<DockerContainerStats>,
 }
 
@@ -52,7 +66,9 @@ pub struct DiskInfo {
     pub total_gb: f64,
     pub available_gb: f64,
     pub usage_percent: f32,
+    #[serde(default)]
     pub read_bytes_per_sec: f64,
+    #[serde(default)]
     pub write_bytes_per_sec: f64,
 }
 

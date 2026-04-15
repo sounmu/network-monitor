@@ -81,16 +81,16 @@ pub async fn load_all_as_map(pool: &PgPool) -> Result<HashMap<String, AlertConfi
     for hk in host_keys_set {
         let cpu = host_overrides
             .get(&(hk, "cpu"))
-            .cloned()
-            .unwrap_or(global_cpu.clone());
+            .copied()
+            .unwrap_or(global_cpu);
         let mem = host_overrides
             .get(&(hk, "memory"))
-            .cloned()
-            .unwrap_or(global_mem.clone());
+            .copied()
+            .unwrap_or(global_mem);
         let disk = host_overrides
             .get(&(hk, "disk"))
-            .cloned()
-            .unwrap_or(global_disk.clone());
+            .copied()
+            .unwrap_or(global_disk);
 
         map.insert(
             hk.to_string(),

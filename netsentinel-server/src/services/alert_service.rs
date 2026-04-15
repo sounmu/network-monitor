@@ -2,6 +2,7 @@ use reqwest::Client;
 use sqlx::PgPool;
 
 use crate::repositories::notification_channels_repo::{self, NotificationChannelRow};
+use crate::services::url_validator;
 
 // ──────────────────────────────────────────────
 // Multi-channel alert delivery
@@ -79,6 +80,12 @@ pub async fn test_channel(client: &Client, channel: &NotificationChannelRow) -> 
 // ──────────────────────────────────────────────
 
 async fn send_discord(client: &Client, webhook_url: &str, message: &str) -> bool {
+    // Defense-in-depth: re-validate URL at runtime to prevent SSRF via DNS rebinding
+    if let Err(e) = url_validator::validate_url(webhook_url, &["https"]).await {
+        tracing::error!(channel = "discord", err = %e, "⚠️ [Alert] Webhook URL failed SSRF validation");
+        return false;
+    }
+
     let body = serde_json::json!({ "content": message });
 
     match client.post(webhook_url).json(&body).send().await {
@@ -99,6 +106,12 @@ async fn send_discord(client: &Client, webhook_url: &str, message: &str) -> bool
 }
 
 async fn send_slack(client: &Client, webhook_url: &str, message: &str) -> bool {
+    // Defense-in-depth: re-validate URL at runtime to prevent SSRF via DNS rebinding
+    if let Err(e) = url_validator::validate_url(webhook_url, &["https"]).await {
+        tracing::error!(channel = "slack", err = %e, "⚠️ [Alert] Webhook URL failed SSRF validation");
+        return false;
+    }
+
     // Slack uses markdown-like formatting (mrkdwn), convert Discord markdown
     let slack_text = message.replace("**", "*"); // Discord bold (**) → Slack bold (*)
 
@@ -153,6 +166,13 @@ async fn send_email(config: &serde_json::Value, message: &str) {
             "⚠️ [Email] Missing required config (smtp_host, from, to)"
         );
         return;
+    }
+
+    if smtp_user.is_empty() || smtp_pass.is_empty() {
+        tracing::warn!(
+            channel = "email",
+            "⚠️ [Email] SMTP credentials are empty — authentication will likely fail"
+        );
     }
 
     // Strip markdown formatting for plain-text email

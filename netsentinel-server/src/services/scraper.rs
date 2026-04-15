@@ -6,12 +6,13 @@ use chrono::{SecondsFormat, Utc};
 use futures::stream::{self, StreamExt};
 use reqwest::Client;
 
-use crate::models::agent_metrics::AgentMetrics;
+use crate::models::agent_metrics::{AgentMetrics, SystemInfoResponse};
 use crate::models::app_state::{AlertConfig, AppState, HostRecord};
 use crate::models::sse_payloads::{HostStatusPayload, SseBroadcast};
 use crate::repositories::{alert_configs_repo, hosts_repo, metrics_repo};
 use crate::services::alert_service;
 use crate::services::metrics_service::{self, STATUS_PERIODIC_INTERVAL_SECS};
+use chrono::DateTime;
 
 /// Result of a single host scrape — carries data needed for batch DB persistence.
 enum ScrapeOutcome {
@@ -27,6 +28,19 @@ enum ScrapeOutcome {
 const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Minimum agent version the server fully supports
 const MIN_AGENT_VERSION: &str = "0.1.0";
+
+/// Semantic version comparison: returns true if `a < b`.
+/// Handles multi-digit segments correctly (e.g. "0.9.0" < "0.10.0" → true).
+fn semver_less_than(a: &str, b: &str) -> bool {
+    let parse = |s: &str| -> Vec<u32> {
+        s.split('.')
+            .filter_map(|seg| seg.parse::<u32>().ok())
+            .collect()
+    };
+    let va = parse(a);
+    let vb = parse(b);
+    va < vb // Vec<u32> lexicographic comparison on numeric segments
+}
 /// HTTP request timeout for each agent scrape (seconds)
 const SCRAPE_TIMEOUT_SECS: u64 = 5;
 /// Cooldown to suppress repeated UP/DOWN alert flapping (seconds)
@@ -108,8 +122,13 @@ async fn scrape_all(
     backoff_map: &mut HashMap<String, HostBackoff>,
     jwt_cache: &mut Option<JwtCache>,
 ) {
-    // Reload the latest host list and alert configs from DB each cycle
-    let hosts = match hosts_repo::list_hosts(&state.db_pool).await {
+    // Reload the latest host list and alert configs from DB in parallel
+    let (hosts_result, alert_map_result) = tokio::join!(
+        hosts_repo::list_hosts(&state.db_pool),
+        alert_configs_repo::load_all_as_map(&state.db_pool),
+    );
+
+    let hosts = match hosts_result {
         Ok(h) => h,
         Err(e) => {
             tracing::error!(err = ?e, "❌ [Scraper] Failed to load hosts from DB");
@@ -117,7 +136,7 @@ async fn scrape_all(
         }
     };
 
-    let alert_map = match alert_configs_repo::load_all_as_map(&state.db_pool).await {
+    let alert_map = match alert_map_result {
         Ok(m) => m,
         Err(e) => {
             tracing::warn!(err = ?e, "⚠️ [Scraper] Failed to load alert configs, using defaults");
@@ -166,6 +185,7 @@ async fn scrape_all(
             let ports: Vec<u16> = host.ports.iter().map(|&p| p as u16).collect();
             let containers = host.containers.clone();
             let jwt_token = jwt_token.clone();
+            let sys_info_updated = host.system_info_updated_at;
 
             async move {
                 let url = host.host_key.clone();
@@ -179,6 +199,7 @@ async fn scrape_all(
                     &alert_config,
                     &state,
                     &jwt_token,
+                    sys_info_updated,
                 )
                 .await;
                 (url, dn, result)
@@ -268,6 +289,7 @@ async fn scrape_one(
     alert_config: &AlertConfig,
     state: &Arc<AppState>,
     jwt_token: &str,
+    system_info_updated_at: Option<DateTime<Utc>>,
 ) -> ScrapeOutcome {
     let ports_str = ports
         .iter()
@@ -295,10 +317,16 @@ async fn scrape_one(
                 ScrapeOutcome::Failed(format!("Payload too large: {} bytes", bytes.len()))
             }
             Ok(bytes) => match bincode::deserialize::<AgentMetrics>(&bytes) {
-                Ok(metrics) => {
+                Ok(mut metrics) => {
+                    // Defense-in-depth: cap untrusted Vec fields to sane maximums
+                    metrics.cpu_cores.truncate(1024);
+                    metrics.network_interfaces.truncate(256);
+                    metrics.docker_stats.truncate(512);
+                    metrics.system.processes.truncate(100);
+
                     if metrics.agent_version.is_empty() {
                         tracing::warn!(target = %target, "⚠️ [Scraper] Agent has no version field — consider upgrading");
-                    } else if metrics.agent_version.as_str() < MIN_AGENT_VERSION {
+                    } else if semver_less_than(&metrics.agent_version, MIN_AGENT_VERSION) {
                         tracing::warn!(
                             target = %target,
                             agent_version = %metrics.agent_version,
@@ -307,7 +335,16 @@ async fn scrape_one(
                             "⚠️ [Scraper] Agent version below minimum — consider upgrading"
                         );
                     }
-                    handle_success(metrics, target, alert_config, state).await
+                    handle_success(
+                        metrics,
+                        target,
+                        alert_config,
+                        state,
+                        client,
+                        jwt_token,
+                        system_info_updated_at,
+                    )
+                    .await
                 }
                 Err(e) => ScrapeOutcome::Failed(format!("Bincode deserialization error: {}", e)),
             },
@@ -328,11 +365,17 @@ async fn scrape_one(
 // Success path
 // ──────────────────────────────────────────────
 
+/// System info refresh interval: 24 hours
+const SYSTEM_INFO_REFRESH_SECS: i64 = 24 * 3600;
+
 async fn handle_success(
     metrics: AgentMetrics,
     target: &str,
     alert_config: &AlertConfig,
     state: &Arc<AppState>,
+    client: &Client,
+    jwt_token: &str,
+    system_info_updated_at: Option<DateTime<Utc>>,
 ) -> ScrapeOutcome {
     // Auto-register host and update display_name if needed
     if let Err(e) =
@@ -427,7 +470,87 @@ async fn handle_success(
         .await;
     }
 
+    // ── System info fetch (on reconnection or stale > 24h) ──
+    let was_offline = needs_recovery_check;
+    let sys_info_stale = system_info_updated_at.is_none_or(|t| {
+        Utc::now().signed_duration_since(t).num_seconds() > SYSTEM_INFO_REFRESH_SECS
+    });
+
+    if was_offline || sys_info_stale {
+        let target_owned = target.to_string();
+        let client = client.clone();
+        let jwt = jwt_token.to_string();
+        let state = Arc::clone(state);
+        tokio::spawn(async move {
+            fetch_and_store_system_info(&client, &target_owned, &jwt, &state).await;
+        });
+    }
+
     ScrapeOutcome::Online(Box::new(metrics))
+}
+
+/// Fetch system info from the agent and persist to DB + in-memory status.
+async fn fetch_and_store_system_info(
+    client: &Client,
+    target: &str,
+    jwt_token: &str,
+    state: &Arc<AppState>,
+) {
+    let url = format!("http://{}/system-info", target);
+    let resp = match client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", jwt_token))
+        .timeout(Duration::from_secs(SCRAPE_TIMEOUT_SECS))
+        .send()
+        .await
+    {
+        Ok(r) if r.status().is_success() => r,
+        Ok(r) => {
+            tracing::warn!(target = %target, status = %r.status(), "⚠️ [SystemInfo] Non-success response");
+            return;
+        }
+        Err(e) => {
+            tracing::warn!(target = %target, err = %e, "⚠️ [SystemInfo] Request failed (agent may not support /system-info)");
+            return;
+        }
+    };
+
+    let info: SystemInfoResponse = match resp.json().await {
+        Ok(i) => i,
+        Err(e) => {
+            tracing::warn!(target = %target, err = %e, "⚠️ [SystemInfo] JSON parse failed");
+            return;
+        }
+    };
+
+    // Persist to DB
+    if let Err(e) = hosts_repo::update_system_info(
+        &state.db_pool,
+        target,
+        &info.os,
+        &info.cpu_model,
+        info.memory_total_mb as i64,
+        info.boot_time as i64,
+        &info.ip_address,
+    )
+    .await
+    {
+        tracing::warn!(target = %target, err = %e, "⚠️ [SystemInfo] DB update failed");
+        return;
+    }
+
+    // Update in-memory SSE status
+    if let Ok(mut lks) = state.last_known_status.write()
+        && let Some(status) = lks.get_mut(target)
+    {
+        status.os_info = Some(info.os);
+        status.cpu_model = Some(info.cpu_model);
+        status.memory_total_mb = Some(info.memory_total_mb as i64);
+        status.boot_time = Some(info.boot_time as i64);
+        status.ip_address = Some(info.ip_address);
+    }
+
+    tracing::info!(target = %target, "✅ [SystemInfo] Updated");
 }
 
 // ──────────────────────────────────────────────
@@ -516,6 +639,11 @@ async fn handle_down(target: &str, display_name: &str, state: &Arc<AppState>) {
                     temperatures: vec![],
                     gpus: vec![],
                     docker_stats: vec![],
+                    os_info: None,
+                    cpu_model: None,
+                    memory_total_mb: None,
+                    boot_time: None,
+                    ip_address: None,
                 });
             // Update only the fields that change — reuse existing Vec data (no clone)
             status.is_online = false;

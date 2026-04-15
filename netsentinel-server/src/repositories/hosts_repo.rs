@@ -13,6 +13,13 @@ pub struct HostRow {
     pub containers: Vec<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    // Static system info (populated by /system-info agent endpoint)
+    pub os_info: Option<String>,
+    pub cpu_model: Option<String>,
+    pub memory_total_mb: Option<i64>,
+    pub boot_time: Option<i64>,
+    pub ip_address: Option<String>,
+    pub system_info_updated_at: Option<DateTime<Utc>>,
 }
 
 /// Fetch all hosts ordered by host_key
@@ -120,6 +127,40 @@ pub async fn delete_host(pool: &PgPool, host_key: &str) -> Result<bool, sqlx::Er
         .execute(pool)
         .await?;
     Ok(result.rows_affected() > 0)
+}
+
+/// Update static system info fields fetched from the agent's /system-info endpoint.
+pub async fn update_system_info(
+    pool: &PgPool,
+    host_key: &str,
+    os_info: &str,
+    cpu_model: &str,
+    memory_total_mb: i64,
+    boot_time: i64,
+    ip_address: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r#"
+        UPDATE hosts SET
+            os_info = $2,
+            cpu_model = $3,
+            memory_total_mb = $4,
+            boot_time = $5,
+            ip_address = $6,
+            system_info_updated_at = NOW(),
+            updated_at = NOW()
+        WHERE host_key = $1
+        "#,
+    )
+    .bind(host_key)
+    .bind(os_info)
+    .bind(cpu_model)
+    .bind(memory_total_mb)
+    .bind(boot_time)
+    .bind(ip_address)
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 /// Auto-register a host on first metric receipt; updates display_name if already present

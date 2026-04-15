@@ -452,7 +452,9 @@ pub async fn fetch_metrics_range(
     let hours = duration.num_hours();
 
     if hours <= 6 {
-        // Short range: return raw rows (max ~2,160 rows), but skip heavy JSONB columns
+        // Short range: return raw rows (max ~2,160 rows).
+        // Include JSONB columns needed for time-series charts (disks, temperatures, docker_stats).
+        // Skip columns only used in real-time SSE (ports, docker_containers, cpu_cores, processes).
         let rows = sqlx::query_as::<_, MetricsRow>(
             r#"
             SELECT id, host_key, display_name, is_online,
@@ -461,11 +463,13 @@ pub async fn fetch_metrics_range(
                    networks,
                    NULL::jsonb AS docker_containers,
                    NULL::jsonb AS ports,
-                   NULL::jsonb AS disks,
+                   disks,
                    NULL::jsonb AS processes,
-                   NULL::jsonb AS temperatures,
-                   NULL::jsonb AS gpus,
-                   cpu_cores, network_interfaces, docker_stats,
+                   temperatures,
+                   gpus,
+                   NULL::jsonb AS cpu_cores,
+                   NULL::jsonb AS network_interfaces,
+                   docker_stats,
                    timestamp
             FROM metrics
             WHERE host_key = $1
@@ -615,6 +619,9 @@ pub mod kst_date_format_opt {
 /// Queries the `hosts` table and LEFT JOINs the most recent metric per host.
 /// A host is considered online if its last metric timestamp is within the past 60 seconds.
 pub async fn fetch_host_summaries(pool: &PgPool) -> Result<Vec<HostSummary>, sqlx::Error> {
+    // Restrict the metrics subquery to the last 5 minutes so TimescaleDB can
+    // prune old chunks instead of scanning the full hypertable.
+    // Hosts with no recent metrics will have is_online = false (COALESCE).
     let rows = sqlx::query_as::<_, HostSummary>(
         r#"
         SELECT
@@ -629,6 +636,7 @@ pub async fn fetch_host_summaries(pool: &PgPool) -> Result<Vec<HostSummary>, sql
                 (timestamp > NOW() - INTERVAL '60 seconds') AS is_online,
                 timestamp AS last_seen
             FROM metrics
+            WHERE timestamp > NOW() - INTERVAL '5 minutes'
             ORDER BY host_key, timestamp DESC
         ) m ON h.host_key = m.host_key
         ORDER BY h.host_key

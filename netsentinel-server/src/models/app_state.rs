@@ -73,6 +73,11 @@ impl AppState {
                     temperatures: vec![],
                     gpus: vec![],
                     docker_stats: vec![],
+                    os_info: host.os_info.clone(),
+                    cpu_model: host.cpu_model.clone(),
+                    memory_total_mb: host.memory_total_mb,
+                    boot_time: host.boot_time,
+                    ip_address: host.ip_address.clone(),
                 });
         }
     }
@@ -97,7 +102,7 @@ pub struct AlertMetricPoint {
 // Loaded from the alert_configs DB table each scrape cycle
 // ──────────────────────────────────────────────
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct MetricAlertRule {
     pub enabled: bool,
     pub threshold: f64,
