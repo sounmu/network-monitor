@@ -59,10 +59,10 @@ export interface DockerContainerStats {
 // 1:1 mapping with the Rust MetricsRow struct
 export interface MetricsRow {
   id: number;
-  /** Unique identifier based on target URL — may be null for pre-migration data */
-  host_key: string | null;
+  /** Unique identifier based on target URL */
+  host_key: string;
   /** Hostname for UI display */
-  display_name: string | null;
+  display_name: string;
   is_online: boolean;
   cpu_usage_percent: number;
   memory_usage_percent: number;
@@ -90,10 +90,6 @@ export interface HostSummary {
   last_seen: string | null;
 }
 
-export interface HostsApiResponse {
-  hosts: HostSummary[];
-}
-
 // ──────────────────────────────────────────
 // SSE event payload types (1:1 mapping with Rust sse_payloads.rs)
 // ──────────────────────────────────────────
@@ -104,7 +100,7 @@ export interface NetworkRate {
   tx_bytes_per_sec: number;
 }
 
-/// event: metrics payload — CPU, memory, network speed (every 10s)
+/// event: metrics payload — CPU, memory, network speed, disks, temperatures, docker stats (every 10s)
 export interface HostMetricsPayload {
   /** Unique identifier based on target URL — prevents display_name collisions */
   host_key: string;
@@ -119,6 +115,9 @@ export interface HostMetricsPayload {
   network_rate: NetworkRate;
   cpu_cores: number[];
   network_interface_rates: NetworkInterfaceRate[];
+  disks: DiskInfo[];
+  temperatures: TemperatureInfo[];
+  docker_stats: DockerContainerStats[];
   timestamp: string;
 }
 
@@ -137,6 +136,12 @@ export interface HostStatusPayload {
   temperatures: TemperatureInfo[];
   gpus: GpuInfo[];
   docker_stats: DockerContainerStats[];
+  // Static system info (fetched on reconnection + every 24h)
+  os_info?: string;
+  cpu_model?: string;
+  memory_total_mb?: number;
+  boot_time?: number;
+  ip_address?: string;
 }
 
 export interface ProcessInfo {

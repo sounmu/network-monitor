@@ -4,17 +4,21 @@ import { useState, useMemo, useCallback, memo } from "react";
 import useSWR from "swr";
 import { useSSE } from "@/app/lib/sse-context";
 import {
-  LineChart,
-  Line,
+  AreaChart,
+  Area,
   XAxis,
   YAxis,
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
-  Legend,
 } from "recharts";
 import { fetcher, getMetricsRangeUrl } from "@/app/lib/api";
-import { MetricsRow } from "@/app/types/metrics";
+import {
+  MetricsRow,
+  DiskInfo,
+  TemperatureInfo,
+  DockerContainerStats,
+} from "@/app/types/metrics";
 import { formatNetworkSpeed, formatNetworkSpeedTick } from "@/app/lib/formatters";
 import DateTimePicker from "./DateTimePicker";
 import { useI18n } from "@/app/i18n/I18nContext";
@@ -42,80 +46,52 @@ const PRESET_CONFIG: { key: PresetButtonKey; minutes: number }[] = [
   { key: "30d", minutes: 60 * 24 * 30 },
 ];
 
+const PALETTE = [
+  "hsl(220, 70%, 55%)", "hsl(160, 60%, 45%)", "hsl(30, 80%, 55%)",
+  "hsl(280, 65%, 60%)", "hsl(340, 75%, 55%)", "hsl(190, 70%, 45%)",
+  "hsl(50, 80%, 50%)", "hsl(0, 70%, 55%)",
+];
+
 // ─── Utilities ───────────────────────────────
 
 function getPresetRange(minutes: number): { start: Date; end: Date } {
   const end = new Date();
-  const start = new Date(end.getTime() - minutes * 60 * 1000);
-  return { start, end };
+  return { start: new Date(end.getTime() - minutes * 60 * 1000), end };
 }
 
 function formatAxisTime(ts: string, rangeHours: number, locale: string): string {
   const d = new Date(ts);
-  const localeStr = locale === "ko" ? "ko-KR" : "en-US";
-  if (rangeHours <= 1) {
-    return d.toLocaleTimeString(localeStr, { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-  }
-  if (rangeHours <= 24) {
-    return d.toLocaleTimeString(localeStr, { hour: "2-digit", minute: "2-digit" });
-  }
-  return d.toLocaleDateString(localeStr, { month: "short", day: "numeric" });
+  const loc = locale === "ko" ? "ko-KR" : "en-US";
+  if (rangeHours <= 1) return d.toLocaleTimeString(loc, { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  if (rangeHours <= 24) return d.toLocaleTimeString(loc, { hour: "2-digit", minute: "2-digit" });
+  return d.toLocaleDateString(loc, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
 /**
- * Auto-scaling Y-axis domain calculation
- * - Pads 10% below the data minimum and 10% above the maximum
- * - Ensures a minFloor to avoid overly granular decimal axes when values are near zero
+ * Generate evenly spaced ticks based on the **selected time range**, not data points.
+ * This guarantees consistent spacing regardless of data density or gaps.
  */
-function autoYDomain(
-  data: Record<string, unknown>[],
-  dataKey: string,
-  minFloor = 0
-): [number, number] | ["auto", "auto"] {
-  if (!data.length) return ["auto", "auto"];
-
-  let min = Infinity;
-  let max = -Infinity;
-  let hasValue = false;
-
-  for (let i = 0; i < data.length; i++) {
-    const v = data[i][dataKey];
-    if (typeof v === "number" && isFinite(v)) {
-      if (v < min) min = v;
-      if (v > max) max = v;
-      hasValue = true;
-    }
+function generateTimeTicks(rangeStart: Date, rangeEnd: Date, count: number): number[] {
+  const startMs = rangeStart.getTime();
+  const endMs = rangeEnd.getTime();
+  const step = (endMs - startMs) / count;
+  const ticks: number[] = [];
+  for (let i = 0; i <= count; i++) {
+    ticks.push(startMs + step * i);
   }
-
-  if (!hasValue) return ["auto", "auto"];
-
-  const range = max - min;
-  const padding = range < 0.01 ? 0.5 : range * 0.12;
-
-  const lower = Math.max(min - padding, minFloor);
-  const upper = max + padding;
-
-  return [lower, upper > lower ? upper : lower + 1];
+  return ticks;
 }
 
-/**
- * Auto domain for multiple network dataKeys
- */
 function autoYDomainMulti(
   data: Record<string, unknown>[],
   dataKeys: string[],
   minFloor = 0
 ): [number, number] | ["auto", "auto"] {
   if (!data.length) return ["auto", "auto"];
-
-  let min = Infinity;
-  let max = -Infinity;
-  let hasValue = false;
-
-  for (let i = 0; i < data.length; i++) {
-    const d = data[i];
-    for (let j = 0; j < dataKeys.length; j++) {
-      const v = d[dataKeys[j]];
+  let min = Infinity, max = -Infinity, hasValue = false;
+  for (const d of data) {
+    for (const k of dataKeys) {
+      const v = d[k];
       if (typeof v === "number" && isFinite(v)) {
         if (v < min) min = v;
         if (v > max) max = v;
@@ -123,31 +99,38 @@ function autoYDomainMulti(
       }
     }
   }
-
   if (!hasValue) return ["auto", "auto"];
-
   const range = max - min;
-  const padding = range < 0.01 ? 0.5 : range * 0.12;
-  const lower = Math.max(min - padding, minFloor);
-  const upper = max + padding;
+  const pad = range < 0.01 ? 0.5 : range * 0.12;
+  const lower = Math.max(min - pad, minFloor);
+  const upper = max + pad;
   return [lower, upper > lower ? upper : lower + 1];
 }
 
-// ─── Tooltip style ───────────────────────────
+function pickCpuTemp(temps: TemperatureInfo[]): TemperatureInfo | null {
+  if (!temps || temps.length === 0) return null;
+  for (const p of ["package", "tctl", "tdie", "cpu"]) {
+    const found = temps.find((t) => t.label.toLowerCase().includes(p) && t.temperature_c > 0);
+    if (found) return found;
+  }
+  return temps.reduce((a, b) => (b.temperature_c > a.temperature_c ? b : a), temps[0]);
+}
+
+// ─── Styles ───────────────────────────────
 
 const tooltipStyle: React.CSSProperties = {
   background: "var(--bg-card)",
   border: "1px solid var(--border-subtle)",
-  borderRadius: 8,
+  borderRadius: 10,
   fontSize: 11,
   color: "var(--text-secondary)",
   padding: "8px 12px",
   boxShadow: "0 4px 12px rgba(0,0,0,0.08)",
 };
 
-// ─── Shared mini chart card ──────────────────
+// ─── ChartCard ──────────────────────────────
 
-interface MiniChartCardProps {
+interface ChartCardProps {
   title: string;
   color: string;
   isLoading: boolean;
@@ -156,27 +139,19 @@ interface MiniChartCardProps {
   dataKey: string | string[];
   colors?: string[];
   rangeHours: number;
+  timeTicks: number[];
   yTickFormatter?: (val: number) => string;
   tooltipFormatter?: (val: number) => [string, string];
   yUnit?: string;
   yDomain?: [number, number] | ["auto", "auto"];
   span2?: boolean;
+  height?: number;
 }
 
-const MiniChartCard = memo(function MiniChartCard({
-  title,
-  color,
-  isLoading,
-  data,
-  dataKey,
-  colors,
-  rangeHours,
-  yTickFormatter,
-  tooltipFormatter,
-  yUnit,
-  yDomain,
-  span2 = false,
-}: MiniChartCardProps) {
+const ChartCard = memo(function ChartCard({
+  title, color, isLoading, data, dataKey, colors, rangeHours, timeTicks,
+  yTickFormatter, tooltipFormatter, yUnit, yDomain, span2 = false, height = 192,
+}: ChartCardProps) {
   const { t, locale } = useI18n();
   const keys = useMemo(
     () => (Array.isArray(dataKey) ? dataKey : [dataKey]),
@@ -184,78 +159,56 @@ const MiniChartCard = memo(function MiniChartCard({
     [JSON.stringify(dataKey)]
   );
   const lineColors = colors ?? [color];
-
   const domain = useMemo(() => {
     if (yDomain) return yDomain;
-    if (keys.length === 1) return autoYDomain(data, keys[0]);
     return autoYDomainMulti(data, keys);
   }, [data, yDomain, keys]);
 
   return (
     <div
       className="glass-card"
-      style={{
-        padding: "16px 18px",
-        gridColumn: span2 ? "1 / -1" : undefined,
-      }}
+      style={{ padding: "16px 18px", gridColumn: span2 ? "1 / -1" : undefined }}
     >
-      <div
-        style={{
-          fontSize: 12,
-          fontWeight: 700,
-          color: "var(--text-secondary)",
-          marginBottom: 10,
-          display: "flex",
-          alignItems: "center",
-          gap: 6,
-        }}
-      >
-        <span
-          style={{
-            width: 8,
-            height: 8,
-            borderRadius: 4,
-            background: color,
-            display: "inline-block",
-            flexShrink: 0,
-          }}
-        />
+      <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 12 }}>
         {title}
       </div>
-
       {isLoading ? (
-        <div className="skeleton" style={{ height: 160 }} />
+        <div className="skeleton" style={{ height }} />
       ) : data.length === 0 ? (
-        <div
-          style={{
-            height: 160,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            color: "var(--text-muted)",
-            fontSize: 12,
-          }}
-        >
+        <div style={{ height, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-muted)", fontSize: 12 }}>
           {t.chart.noData}
         </div>
       ) : (
-        <ResponsiveContainer width="100%" height={160}>
-          <LineChart data={data} margin={{ top: 4, right: 6, bottom: 0, left: -8 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="var(--bg-card-hover)" />
+        <ResponsiveContainer width="100%" height={height}>
+          <AreaChart data={data} margin={{ top: 4, right: 6, bottom: 0, left: -8 }}>
+            <defs>
+              {keys.map((k, idx) => {
+                const c = lineColors[idx % lineColors.length] ?? color;
+                return (
+                  <linearGradient key={k} id={`g-${k.replace(/[\s()%/]/g, "")}`} x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor={c} stopOpacity={keys.length > 4 ? 0.15 : 0.3} />
+                    <stop offset="100%" stopColor={c} stopOpacity={0.02} />
+                  </linearGradient>
+                );
+              })}
+            </defs>
+            <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="var(--bg-card-hover)" />
             <XAxis
-              dataKey="time"
-              tickFormatter={(val) => formatAxisTime(val, rangeHours, locale)}
+              dataKey="ts"
+              type="number"
+              scale="time"
+              domain={[timeTicks[0], timeTicks[timeTicks.length - 1]]}
+              ticks={timeTicks}
+              tickFormatter={(val) => formatAxisTime(new Date(val).toISOString(), rangeHours, locale)}
               tick={{ fill: "var(--text-muted)", fontSize: 10 }}
               tickLine={false}
               axisLine={{ stroke: "var(--border-subtle)" }}
-              interval="preserveStartEnd"
-              minTickGap={60}
             />
             <YAxis
               domain={domain}
               tick={{ fill: "var(--text-muted)", fontSize: 10 }}
               tickLine={false}
-              axisLine={{ stroke: "var(--border-subtle)" }}
+              axisLine={false}
               tickFormatter={yTickFormatter}
               unit={yTickFormatter ? undefined : yUnit}
               width={yTickFormatter ? 68 : 48}
@@ -263,7 +216,7 @@ const MiniChartCard = memo(function MiniChartCard({
             />
             <Tooltip
               contentStyle={tooltipStyle}
-              labelFormatter={(label) => new Date(label as string).toLocaleString(locale === "ko" ? "ko-KR" : "en-US")}
+              labelFormatter={(label) => new Date(label as number).toLocaleString(locale === "ko" ? "ko-KR" : "en-US")}
               formatter={
                 tooltipFormatter
                   ? (value: unknown) => {
@@ -272,23 +225,23 @@ const MiniChartCard = memo(function MiniChartCard({
                     }
                   : undefined
               }
+              itemSorter={(item) => -(typeof item.value === "number" ? item.value : 0)}
             />
-            {keys.length > 1 && (
-              <Legend wrapperStyle={{ fontSize: 11, color: "var(--text-secondary)", paddingTop: 6 }} />
-            )}
             {keys.map((k, idx) => (
-              <Line
+              <Area
                 key={k}
-                type="linear"
+                type="monotone"
                 dataKey={k}
-                stroke={lineColors[idx] ?? color}
-                strokeWidth={1.8}
+                stroke={lineColors[idx % lineColors.length] ?? color}
+                strokeWidth={1.5}
+                fill={`url(#g-${k.replace(/[\s()%/]/g, "")})`}
                 dot={false}
-                activeDot={{ r: 3, fill: lineColors[idx] ?? color, stroke: "var(--bg-card)", strokeWidth: 2 }}
+                activeDot={{ r: 3, fill: lineColors[idx % lineColors.length] ?? color, stroke: "var(--bg-card)", strokeWidth: 2 }}
                 isAnimationActive={false}
+                connectNulls
               />
             ))}
-          </LineChart>
+          </AreaChart>
         </ResponsiveContainer>
       )}
     </div>
@@ -324,36 +277,22 @@ export default function TimeSeriesChart({ hostKey }: TimeSeriesChartProps) {
     keepPreviousData: true,
   });
 
-  // Merge REST data + SSE latest data point
   const allRows = useMemo(() => {
     if (!liveMetrics) return rows;
-
-    const lastRestTs = rows.length > 0
-      ? new Date(rows[rows.length - 1].timestamp).getTime()
-      : 0;
+    const lastRestTs = rows.length > 0 ? new Date(rows[rows.length - 1].timestamp).getTime() : 0;
     const liveTs = new Date(liveMetrics.timestamp).getTime();
     if (liveTs <= lastRestTs) return rows;
-
     const syntheticRow: MetricsRow = {
-      id: 0,
-      host_key: liveMetrics.host_key,
-      display_name: liveMetrics.display_name,
-      is_online: liveMetrics.is_online,
-      cpu_usage_percent: liveMetrics.cpu_usage_percent,
+      id: 0, host_key: liveMetrics.host_key, display_name: liveMetrics.display_name,
+      is_online: liveMetrics.is_online, cpu_usage_percent: liveMetrics.cpu_usage_percent,
       memory_usage_percent: liveMetrics.memory_usage_percent,
-      load_1min: liveMetrics.load_1min,
-      load_5min: liveMetrics.load_5min,
-      load_15min: liveMetrics.load_15min,
-      networks: null,
-      docker_containers: null,
-      ports: null,
-      disks: null,
+      load_1min: liveMetrics.load_1min, load_5min: liveMetrics.load_5min, load_15min: liveMetrics.load_15min,
+      networks: null, docker_containers: null, ports: null,
+      disks: liveMetrics.disks ?? null,
       processes: null,
-      temperatures: null,
-      gpus: null,
-      cpu_cores: null,
-      network_interfaces: null,
-      docker_stats: null,
+      temperatures: liveMetrics.temperatures ?? null,
+      gpus: null, cpu_cores: null, network_interfaces: null,
+      docker_stats: liveMetrics.docker_stats ?? null,
       timestamp: liveMetrics.timestamp,
     };
     return [...rows, syntheticRow];
@@ -363,6 +302,12 @@ export default function TimeSeriesChart({ hostKey }: TimeSeriesChartProps) {
 
   const rangeHours = useMemo(
     () => (range.end.getTime() - range.start.getTime()) / (1000 * 60 * 60),
+    [range]
+  );
+
+  // Evenly spaced time ticks based on selected range (not data)
+  const timeTicks = useMemo(
+    () => generateTimeTicks(range.start, range.end, 5),
     [range]
   );
 
@@ -379,104 +324,103 @@ export default function TimeSeriesChart({ hostKey }: TimeSeriesChartProps) {
     setRange((prev) => ({ ...prev, end: date, preset: "custom" }));
   }, []);
 
-  // ─── Chart data transformation (single-pass) ──
-  // All chart datasets derived in one useMemo to avoid 5 separate dependency checks
-  // and 5 separate iterations over the sorted array.
-
-  // Stable i18n label references — avoids recalculating all chart data on locale change
-  const loadLabels = useMemo(
-    () => ({ l1: t.chart.load1m, l5: t.chart.load5m, l15: t.chart.load15m }),
-    [t.chart.load1m, t.chart.load5m, t.chart.load15m]
-  );
-
-  const { cpuData, ramData, rxData, txData, loadData, sorted } = useMemo(() => {
+  // ─── Data extraction (single pass) ──────────────
+  const chartData = useMemo(() => {
     const s = [...allRows].sort(
       (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
     );
 
-    const cpu: { time: string; "CPU (%)": number }[] = [];
-    const ram: { time: string; "RAM (%)": number }[] = [];
-    const load: Record<string, string | number>[] = [];
-    const rx: { time: string; RX: number }[] = [];
-    const tx: { time: string; TX: number }[] = [];
+    const cpu: { ts: number; "CPU (%)": number }[] = [];
+    const ram: { ts: number; "RAM (%)": number }[] = [];
+    const net: { ts: number; RX: number; TX: number }[] = [];
+    const diskUsageNames = new Set<string>();
+    const diskUsageData: Record<string, number>[] = [];
+    const diskIo: { ts: number; Read: number; Write: number }[] = [];
+    const tempData: { ts: number; "CPU Temp": number }[] = [];
+    const dockerCpuNames = new Set<string>();
+    const dockerCpuData: Record<string, number>[] = [];
+    const dockerMemNames = new Set<string>();
+    const dockerMemData: Record<string, number>[] = [];
 
     for (let i = 0; i < s.length; i++) {
       const r = s[i];
-      cpu.push({ time: r.timestamp, "CPU (%)": +r.cpu_usage_percent.toFixed(1) });
-      ram.push({ time: r.timestamp, "RAM (%)": +r.memory_usage_percent.toFixed(1) });
-      load.push({
-        time: r.timestamp,
-        [loadLabels.l1]: +r.load_1min.toFixed(2),
-        [loadLabels.l5]: +r.load_5min.toFixed(2),
-        [loadLabels.l15]: +r.load_15min.toFixed(2),
-      });
+      const tsMs = new Date(r.timestamp).getTime();
 
-      // Network delta (requires previous row)
+      cpu.push({ ts: tsMs, "CPU (%)": +r.cpu_usage_percent.toFixed(1) });
+      ram.push({ ts: tsMs, "RAM (%)": +r.memory_usage_percent.toFixed(1) });
+
+      // Network: RX + TX merged
       if (i > 0) {
         const prev = s[i - 1];
         const currNet = r.networks;
         const prevNet = prev.networks;
         if (currNet && prevNet) {
-          const dtSec = Math.max(
-            (new Date(r.timestamp).getTime() - new Date(prev.timestamp).getTime()) / 1000,
-            1,
-          );
-          const rxDelta = currNet.total_rx_bytes - prevNet.total_rx_bytes;
-          const txDelta = currNet.total_tx_bytes - prevNet.total_tx_bytes;
-          rx.push({ time: r.timestamp, RX: rxDelta >= 0 ? +(rxDelta / dtSec).toFixed(0) : 0 });
-          tx.push({ time: r.timestamp, TX: txDelta >= 0 ? +(txDelta / dtSec).toFixed(0) : 0 });
+          const dt = Math.max((tsMs - new Date(prev.timestamp).getTime()) / 1000, 1);
+          const rxD = currNet.total_rx_bytes - prevNet.total_rx_bytes;
+          const txD = currNet.total_tx_bytes - prevNet.total_tx_bytes;
+          net.push({ ts: tsMs, RX: rxD >= 0 ? +(rxD / dt).toFixed(0) : 0, TX: txD >= 0 ? +(txD / dt).toFixed(0) : 0 });
+        } else if (!currNet && liveMetrics && r.timestamp === liveMetrics.timestamp) {
+          net.push({ ts: tsMs, RX: +liveMetrics.network_rate.rx_bytes_per_sec.toFixed(0), TX: +liveMetrics.network_rate.tx_bytes_per_sec.toFixed(0) });
+        }
+      }
+
+      // Disk usage + I/O
+      const disks = r.disks as unknown as DiskInfo[] | null;
+      if (disks && disks.length > 0) {
+        const uPoint: Record<string, number> = { ts: tsMs };
+        let totalRead = 0;
+        let totalWrite = 0;
+        for (const d of disks) {
+          const label = d.mount_point || d.name;
+          diskUsageNames.add(label);
+          uPoint[label] = +d.usage_percent.toFixed(1);
+          totalRead += d.read_bytes_per_sec ?? 0;
+          totalWrite += d.write_bytes_per_sec ?? 0;
+        }
+        diskUsageData.push(uPoint);
+        diskIo.push({ ts: tsMs, Read: +totalRead.toFixed(0), Write: +totalWrite.toFixed(0) });
+      }
+
+      // Docker container stats (CPU% + Memory MB)
+      const dStats = r.docker_stats as unknown as DockerContainerStats[] | null;
+      if (dStats && dStats.length > 0) {
+        const cpuPt: Record<string, number> = { ts: tsMs };
+        const memPt: Record<string, number> = { ts: tsMs };
+        for (const ds of dStats) {
+          dockerCpuNames.add(ds.container_name);
+          dockerMemNames.add(ds.container_name);
+          cpuPt[ds.container_name] = +ds.cpu_percent.toFixed(2);
+          memPt[ds.container_name] = ds.memory_usage_mb;
+        }
+        dockerCpuData.push(cpuPt);
+        dockerMemData.push(memPt);
+      }
+
+      // Temperature — single CPU sensor
+      const temps = r.temperatures as unknown as TemperatureInfo[] | null;
+      if (temps && temps.length > 0) {
+        const main = pickCpuTemp(temps);
+        if (main && main.temperature_c > 0) {
+          tempData.push({ ts: tsMs, "CPU Temp": +main.temperature_c.toFixed(1) });
         }
       }
     }
 
-    return { cpuData: cpu, ramData: ram, rxData: rx, txData: tx, loadData: load, sorted: s };
-  }, [allRows, loadLabels]);
+    return {
+      cpu, ram, net,
+      diskUsageData, diskUsageKeys: [...diskUsageNames],
+      diskIo,
+      dockerCpuData, dockerCpuKeys: [...dockerCpuNames],
+      dockerMemData, dockerMemKeys: [...dockerMemNames],
+      tempData,
+    };
+  }, [allRows, liveMetrics]);
 
-  // Memoize Y-axis domains — stabilizes array references so MiniChartCard's memo works
-  const { cpuDomain, ramDomain } = useMemo(() => ({
-    cpuDomain: autoYDomain(cpuData, "CPU (%)", 0),
-    ramDomain: autoYDomain(ramData, "RAM (%)", 0),
-  }), [cpuData, ramData]);
-
-  // Latest summary: prefer SSE live data, fall back to last item of sorted array
-  const latestFromRows = sorted.length > 0 ? sorted[sorted.length - 1] : null;
-  const latest = liveMetrics ?? latestFromRows;
+  const cpuDomain = useMemo(() => autoYDomainMulti(chartData.cpu, ["CPU (%)"], 0), [chartData.cpu]);
+  const ramDomain = useMemo(() => autoYDomainMulti(chartData.ram, ["RAM (%)"], 0), [chartData.ram]);
 
   return (
     <div>
-      {/* Current status summary card */}
-      {latest && (
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))",
-            gap: 10,
-            marginBottom: 14,
-          }}
-        >
-          <SummaryCard
-            label="CPU"
-            value={`${latest.cpu_usage_percent.toFixed(1)}%`}
-            color={thresholdColor(latest.cpu_usage_percent, 50, 80)}
-          />
-          <SummaryCard
-            label="RAM"
-            value={`${latest.memory_usage_percent.toFixed(1)}%`}
-            color={thresholdColor(latest.memory_usage_percent)}
-          />
-          <SummaryCard
-            label="Load (1m)"
-            value={latest.load_1min.toFixed(2)}
-            color="var(--accent-purple)"
-          />
-          <SummaryCard
-            label={t.chart.dataPoints}
-            value={`${allRows.length}`}
-            color="var(--accent-blue)"
-          />
-        </div>
-      )}
-
       {/* Time range controls */}
       <div className="time-controls">
         {PRESET_CONFIG.map(({ key, minutes }) => (
@@ -488,124 +432,134 @@ export default function TimeSeriesChart({ hostKey }: TimeSeriesChartProps) {
             {t.chart.presets[key]}
           </button>
         ))}
-        <div
-          style={{ width: 1, height: 24, background: "var(--border-subtle)", margin: "0 4px" }}
-        />
+        <div style={{ width: 1, height: 24, background: "var(--border-subtle)", margin: "0 4px" }} />
         <DateTimePicker value={range.start} onChange={onCustomStartChange} />
         <span style={{ color: "var(--text-muted)", fontSize: 13 }}>~</span>
         <DateTimePicker value={range.end} onChange={onCustomEndChange} />
       </div>
 
-      {/* 5-chart grid */}
+      {/* Chart grid */}
       <div className="chart-grid">
-        <MiniChartCard
+        <ChartCard
           title={t.chart.cpuUsage}
           color="var(--accent-blue)"
           isLoading={isInitialLoading}
-          data={cpuData}
+          data={chartData.cpu}
           dataKey="CPU (%)"
           rangeHours={rangeHours}
+          timeTicks={timeTicks}
           yTickFormatter={fmtPercent}
           yDomain={cpuDomain}
         />
-
-        <MiniChartCard
+        <ChartCard
           title={t.chart.ramUsage}
-          color="var(--accent-cyan)"
+          color="var(--accent-purple)"
           isLoading={isInitialLoading}
-          data={ramData}
+          data={chartData.ram}
           dataKey="RAM (%)"
           rangeHours={rangeHours}
+          timeTicks={timeTicks}
           yTickFormatter={fmtPercent}
           yDomain={ramDomain}
         />
 
-        <MiniChartCard
-          title="Network In (RX)"
+        {/* Network Bandwidth (RX + TX) */}
+        <ChartCard
+          title={t.chart.networkBandwidth}
           color="var(--accent-green)"
+          colors={["var(--accent-green)", "var(--accent-blue)"]}
           isLoading={isInitialLoading}
-          data={rxData}
-          dataKey="RX"
+          data={chartData.net}
+          dataKey={["RX", "TX"]}
           rangeHours={rangeHours}
+          timeTicks={timeTicks}
           yTickFormatter={formatNetworkSpeedTick}
-          tooltipFormatter={fmtRxTooltip}
+          tooltipFormatter={fmtNetTooltip}
         />
 
-        <MiniChartCard
-          title="Network Out (TX)"
-          color="var(--accent-yellow)"
-          isLoading={isInitialLoading}
-          data={txData}
-          dataKey="TX"
-          rangeHours={rangeHours}
-          yTickFormatter={formatNetworkSpeedTick}
-          tooltipFormatter={fmtTxTooltip}
-        />
+        {/* CPU Temperature */}
+        {chartData.tempData.length > 0 && (
+          <ChartCard
+            title={t.chart.cpuTemperature}
+            color="var(--accent-red)"
+            isLoading={isInitialLoading}
+            data={chartData.tempData}
+            dataKey="CPU Temp"
+            rangeHours={rangeHours}
+            timeTicks={timeTicks}
+            yTickFormatter={fmtTemp}
+          />
+        )}
 
-        <MiniChartCard
-          title="Load Average"
-          color="var(--accent-blue)"
-          colors={["var(--accent-blue)", "var(--accent-purple)", "var(--accent-yellow)"]}
-          isLoading={isInitialLoading}
-          data={loadData}
-          dataKey={[loadLabels.l1, loadLabels.l5, loadLabels.l15]}
-          rangeHours={rangeHours}
-          yTickFormatter={fmtLoad}
-          span2
-        />
+        {/* Disk Usage */}
+        {chartData.diskUsageKeys.length > 0 && (
+          <ChartCard
+            title={t.host.diskUsage}
+            color="var(--accent-yellow)"
+            colors={PALETTE}
+            isLoading={isInitialLoading}
+            data={chartData.diskUsageData}
+            dataKey={chartData.diskUsageKeys}
+            rangeHours={rangeHours}
+            timeTicks={timeTicks}
+            yTickFormatter={fmtPercent}
+          />
+        )}
+
+        {/* Disk I/O (Read + Write) */}
+        {chartData.diskIo.length > 0 && (
+          <ChartCard
+            title={t.chart.diskIo}
+            color="var(--accent-cyan)"
+            colors={["var(--accent-cyan)", "var(--accent-purple)"]}
+            isLoading={isInitialLoading}
+            data={chartData.diskIo}
+            dataKey={["Read", "Write"]}
+            rangeHours={rangeHours}
+            timeTicks={timeTicks}
+            yTickFormatter={formatNetworkSpeedTick}
+            tooltipFormatter={fmtIoTooltip}
+          />
+        )}
+
+        {/* Docker CPU Usage */}
+        {chartData.dockerCpuKeys.length > 0 && (
+          <ChartCard
+            title={t.chart.dockerCpuUsage}
+            color={PALETTE[0]}
+            colors={PALETTE}
+            isLoading={isInitialLoading}
+            data={chartData.dockerCpuData}
+            dataKey={chartData.dockerCpuKeys}
+            rangeHours={rangeHours}
+            timeTicks={timeTicks}
+            yTickFormatter={fmtPercent}
+          />
+        )}
+
+        {/* Docker Memory */}
+        {chartData.dockerMemKeys.length > 0 && (
+          <ChartCard
+            title={t.chart.dockerMemory}
+            color={PALETTE[2]}
+            colors={PALETTE}
+            isLoading={isInitialLoading}
+            data={chartData.dockerMemData}
+            dataKey={chartData.dockerMemKeys}
+            rangeHours={rangeHours}
+            timeTicks={timeTicks}
+            yTickFormatter={fmtMb}
+          />
+        )}
       </div>
     </div>
   );
 }
 
-// ─── Stable formatter references (avoids re-creating inline closures on every render) ──
+// ─── Stable formatters ──
 
 const fmtPercent = (v: number) => `${v.toFixed(1)}%`;
-const fmtLoad = (v: number) => v.toFixed(2);
-const fmtRxTooltip = (v: number): [string, string] => [formatNetworkSpeed(v), "RX"];
-const fmtTxTooltip = (v: number): [string, string] => [formatNetworkSpeed(v), "TX"];
-
-// ─── Sub-components ─────────────────────────
-
-const SummaryCard = memo(function SummaryCard({
-  label,
-  value,
-  color,
-}: {
-  label: string;
-  value: string;
-  color: string;
-}) {
-  return (
-    <div
-      style={{
-        background: "var(--bg-card)",
-        border: "1px solid var(--border-subtle)",
-        borderRadius: 8,
-        padding: "12px 14px",
-      }}
-    >
-      <div
-        style={{
-          fontSize: 11,
-          color: "var(--text-muted)",
-          fontWeight: 500,
-          marginBottom: 4,
-        }}
-      >
-        {label}
-      </div>
-      <div
-        style={{ fontSize: 20, fontWeight: 700, color, lineHeight: 1, fontFamily: "var(--font-mono), monospace" }}
-      >
-        {value}
-      </div>
-    </div>
-  );
-});
-
-function thresholdColor(pct: number, warn = 65, danger = 85): string {
-  if (pct >= danger) return "var(--accent-red)";
-  if (pct >= warn) return "var(--accent-yellow)";
-  return "var(--accent-green)";
-}
+const fmtTemp = (v: number) => `${v.toFixed(0)}°C`;
+const fmtMb = (v: number) => v >= 1024 ? `${(v / 1024).toFixed(1)}G` : `${v.toFixed(0)}M`;
+const fmtNetTooltip = (v: number): [string, string] => [formatNetworkSpeed(v), ""];
+const fmtIoTooltip = (v: number): [string, string] => [formatNetworkSpeed(v), ""];

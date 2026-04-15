@@ -43,6 +43,12 @@ pub struct HostMetricsPayload {
     pub cpu_cores: Vec<f32>,
     /// Per-interface throughput (bytes/sec)
     pub network_interface_rates: Vec<NetworkInterfaceRate>,
+    /// Per-disk usage + I/O throughput (sent every cycle for real-time charts)
+    pub disks: Vec<DiskInfo>,
+    /// Temperature sensor readings
+    pub temperatures: Vec<TemperatureInfo>,
+    /// Per-container resource usage (CPU%, memory)
+    pub docker_stats: Vec<DockerContainerStats>,
     pub timestamp: String,
 }
 
@@ -63,6 +69,17 @@ pub struct HostStatusPayload {
     pub temperatures: Vec<TemperatureInfo>,
     pub gpus: Vec<GpuInfo>,
     pub docker_stats: Vec<DockerContainerStats>,
+    // ── Static system info (fetched on reconnection + every 24h) ──
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub os_info: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cpu_model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory_total_mb: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub boot_time: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ip_address: Option<String>,
 }
 
 /// Event variants delivered to SSE handlers via a `tokio::sync::broadcast` channel

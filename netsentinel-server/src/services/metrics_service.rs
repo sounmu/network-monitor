@@ -242,7 +242,7 @@ pub async fn process_metrics(
             record.last_status_sent = Some(now);
         }
 
-        // ── Build metrics SSE payload (only scalar copies, no heap allocation) ──
+        // ── Build metrics SSE payload ──
         let metrics_payload = HostMetricsPayload {
             host_key: target_str,
             display_name: hostname.clone(),
@@ -255,6 +255,9 @@ pub async fn process_metrics(
             network_rate,
             cpu_cores: metrics.cpu_cores.clone(),
             network_interface_rates,
+            disks: metrics.system.disks.clone(),
+            temperatures: metrics.system.temperatures.clone(),
+            docker_stats: metrics.docker_stats.clone(),
             timestamp: server_ts.clone(),
         };
 
@@ -274,6 +277,21 @@ pub async fn process_metrics(
 
     // ── Build status payload OUTSIDE the lock (Vec clones happen here, no contention) ──
     let status_payload = if needs_status {
+        // Carry forward system info from existing status (populated by fetch_and_store_system_info)
+        let prev_sys = state.last_known_status.read().ok().and_then(|lks| {
+            lks.get(target).map(|s| {
+                (
+                    s.os_info.clone(),
+                    s.cpu_model.clone(),
+                    s.memory_total_mb,
+                    s.boot_time,
+                    s.ip_address.clone(),
+                )
+            })
+        });
+        let (os_info, cpu_model, memory_total_mb, boot_time, ip_address) =
+            prev_sys.unwrap_or((None, None, None, None, None));
+
         Some(HostStatusPayload {
             host_key: metrics_payload.host_key.clone(),
             display_name: hostname.clone(),
@@ -286,31 +304,17 @@ pub async fn process_metrics(
             temperatures: metrics.system.temperatures.clone(),
             gpus: metrics.system.gpus.clone(),
             docker_stats: metrics.docker_stats.clone(),
+            os_info,
+            cpu_model,
+            memory_total_mb,
+            boot_time,
+            ip_address,
         })
     } else {
         None
     };
 
-    // ── Send alerts outside the lock (async) ──
-    // Alert delivery can take hundreds of milliseconds — must run after the lock is released.
-    for action in &alert_actions {
-        let message = action.to_message();
-        crate::services::alert_service::send_alert(&http_client, &state.db_pool, &message).await;
-
-        // Log to alert_history (best-effort, don't block on failure)
-        if let Err(e) = crate::repositories::alert_history_repo::insert_alert(
-            &state.db_pool,
-            target,
-            action.alert_type_str(),
-            &message,
-        )
-        .await
-        {
-            tracing::error!(err = ?e, "⚠️ [AlertHistory] Failed to log alert");
-        }
-    }
-
-    // Update alert state after sending (brief write lock)
+    // Update alert state immediately (brief write lock) before spawning delivery
     if !alert_actions.is_empty() {
         let mut store = state.store.write().map_err(|e| {
             AppError::Internal(format!("Failed to acquire store write lock: {}", e))
@@ -318,6 +322,34 @@ pub async fn process_metrics(
         if let Some(record) = store.hosts.get_mut(target) {
             update_alert_state_after_send(record, &alert_actions);
         }
+    }
+
+    // ── Fire-and-forget alert delivery (spawned, non-blocking) ──
+    // Alert delivery can take hundreds of milliseconds — spawn it so it doesn't
+    // block the scraper from processing the next host.
+    if !alert_actions.is_empty() {
+        let messages: Vec<(String, String)> = alert_actions
+            .iter()
+            .map(|a| (a.alert_type_str().to_string(), a.to_message()))
+            .collect();
+        let http_client = http_client.clone();
+        let db_pool = state.db_pool.clone();
+        let target_owned = target.to_string();
+        tokio::spawn(async move {
+            for (alert_type, message) in &messages {
+                crate::services::alert_service::send_alert(&http_client, &db_pool, message).await;
+                if let Err(e) = crate::repositories::alert_history_repo::insert_alert(
+                    &db_pool,
+                    &target_owned,
+                    alert_type,
+                    message,
+                )
+                .await
+                {
+                    tracing::error!(err = ?e, "⚠️ [AlertHistory] Failed to log alert");
+                }
+            }
+        });
     }
 
     // DB persistence is deferred — the caller (scraper) collects ProcessResults
@@ -337,67 +369,72 @@ pub async fn process_metrics(
 // Network throughput calculation
 // ──────────────────────────────────────────────
 
-/// Convert cumulative byte counters reported by the agent into per-second throughput.
-///
-/// The agent already excludes virtual/loopback interfaces, so the server only needs a delta calculation.
-/// - First call (no previous value): reports rate=0; accurate values start from the next cycle.
-/// - saturating_sub: prevents underflow if counters reset (e.g. after a reboot).
+/// Compute bytes-per-second rate from cumulative counters (shared logic).
+/// Returns (rx_rate, tx_rate). First call (no previous) returns (0, 0).
+/// `saturating_sub` prevents underflow if counters reset (e.g. after reboot).
+fn delta_rate(
+    current_rx: u64,
+    current_tx: u64,
+    prev: Option<&(u64, u64, Instant)>,
+    now: Instant,
+) -> (f64, f64) {
+    if let Some(&(prev_rx, prev_tx, prev_time)) = prev {
+        let elapsed = now.duration_since(prev_time).as_secs_f64();
+        if elapsed > 0.0 {
+            return (
+                current_rx.saturating_sub(prev_rx) as f64 / elapsed,
+                current_tx.saturating_sub(prev_tx) as f64 / elapsed,
+            );
+        }
+    }
+    (0.0, 0.0)
+}
+
+/// Convert cumulative aggregate byte counters into per-second throughput.
 fn compute_network_rate(
     network: &NetworkTotal,
     prev: &mut Option<(u64, u64, Instant)>,
 ) -> NetworkRate {
     let now = Instant::now();
-    let rate = if let Some((prev_rx, prev_tx, prev_time)) = *prev {
-        let elapsed = now.duration_since(prev_time).as_secs_f64();
-        if elapsed > 0.0 {
-            NetworkRate {
-                rx_bytes_per_sec: network.total_rx_bytes.saturating_sub(prev_rx) as f64 / elapsed,
-                tx_bytes_per_sec: network.total_tx_bytes.saturating_sub(prev_tx) as f64 / elapsed,
-            }
-        } else {
-            NetworkRate::default()
-        }
-    } else {
-        NetworkRate::default()
-    };
+    let (rx, tx) = delta_rate(
+        network.total_rx_bytes,
+        network.total_tx_bytes,
+        prev.as_ref(),
+        now,
+    );
     *prev = Some((network.total_rx_bytes, network.total_tx_bytes, now));
-    rate
+    NetworkRate {
+        rx_bytes_per_sec: rx,
+        tx_bytes_per_sec: tx,
+    }
 }
 
 /// Convert per-interface cumulative byte counters into per-second rates.
-/// Same delta pattern as `compute_network_rate`, but applied per-interface.
+/// Prunes stale entries for interfaces no longer reported by the agent.
 fn compute_interface_rates(
     interfaces: &[NetworkInterfaceInfo],
     prev_map: &mut std::collections::HashMap<String, (u64, u64, Instant)>,
 ) -> Vec<NetworkInterfaceRate> {
     let now = Instant::now();
-    let mut rates = Vec::with_capacity(interfaces.len());
-    for iface in interfaces {
-        let rate = if let Some((prev_rx, prev_tx, prev_time)) = prev_map.get(&iface.name) {
-            let elapsed = now.duration_since(*prev_time).as_secs_f64();
-            if elapsed > 0.0 {
-                NetworkInterfaceRate {
-                    name: iface.name.clone(),
-                    rx_bytes_per_sec: iface.rx_bytes.saturating_sub(*prev_rx) as f64 / elapsed,
-                    tx_bytes_per_sec: iface.tx_bytes.saturating_sub(*prev_tx) as f64 / elapsed,
-                }
-            } else {
-                NetworkInterfaceRate {
-                    name: iface.name.clone(),
-                    rx_bytes_per_sec: 0.0,
-                    tx_bytes_per_sec: 0.0,
-                }
-            }
-        } else {
+    let rates: Vec<NetworkInterfaceRate> = interfaces
+        .iter()
+        .map(|iface| {
+            let (rx, tx) = delta_rate(
+                iface.rx_bytes,
+                iface.tx_bytes,
+                prev_map.get(&iface.name),
+                now,
+            );
+            prev_map.insert(iface.name.clone(), (iface.rx_bytes, iface.tx_bytes, now));
             NetworkInterfaceRate {
                 name: iface.name.clone(),
-                rx_bytes_per_sec: 0.0,
-                tx_bytes_per_sec: 0.0,
+                rx_bytes_per_sec: rx,
+                tx_bytes_per_sec: tx,
             }
-        };
-        prev_map.insert(iface.name.clone(), (iface.rx_bytes, iface.tx_bytes, now));
-        rates.push(rate);
-    }
+        })
+        .collect();
+    // Prune stale entries (removed interfaces, e.g. Docker veth teardown)
+    prev_map.retain(|name, _| interfaces.iter().any(|i| i.name == *name));
     rates
 }
 
@@ -665,11 +702,7 @@ fn collect_disk_alerts(
 
 /// Returns true if the cooldown period has elapsed. Cooldown duration is injected for flexibility.
 fn cooldown_elapsed(last_alert: Option<Instant>, cooldown_secs: u64) -> bool {
-    let cooldown = Duration::from_secs(cooldown_secs);
-    match last_alert {
-        None => true,
-        Some(t) => t.elapsed() >= cooldown,
-    }
+    last_alert.is_none_or(|t| t.elapsed() >= Duration::from_secs(cooldown_secs))
 }
 
 fn update_alert_state_after_send(record: &mut HostRecord, actions: &[AlertAction]) {
@@ -1183,5 +1216,218 @@ mod tests {
         }];
         update_alert_state_after_send(&mut record, &actions);
         assert!(!record.alert_state.port_alerted.contains_key(&443));
+    }
+
+    // ── compute_network_rate ────────────────────
+
+    #[test]
+    fn test_network_rate_first_call_returns_zero() {
+        let net = NetworkTotal {
+            total_rx_bytes: 1000,
+            total_tx_bytes: 2000,
+        };
+        let mut prev = None;
+        let rate = compute_network_rate(&net, &mut prev);
+        assert_eq!(rate.rx_bytes_per_sec, 0.0);
+        assert_eq!(rate.tx_bytes_per_sec, 0.0);
+        assert!(prev.is_some());
+    }
+
+    #[test]
+    fn test_network_rate_second_call_computes_delta() {
+        let mut prev = Some((1000u64, 2000u64, Instant::now() - Duration::from_secs(1)));
+        let net = NetworkTotal {
+            total_rx_bytes: 2000,
+            total_tx_bytes: 4000,
+        };
+        let rate = compute_network_rate(&net, &mut prev);
+        // 1000 bytes in ~1 second
+        assert!(rate.rx_bytes_per_sec > 900.0 && rate.rx_bytes_per_sec < 1100.0);
+        assert!(rate.tx_bytes_per_sec > 1900.0 && rate.tx_bytes_per_sec < 2100.0);
+    }
+
+    #[test]
+    fn test_network_rate_counter_reset_saturating() {
+        // Simulates counter reset after reboot
+        let mut prev = Some((5000u64, 5000u64, Instant::now() - Duration::from_secs(1)));
+        let net = NetworkTotal {
+            total_rx_bytes: 100,
+            total_tx_bytes: 100,
+        };
+        let rate = compute_network_rate(&net, &mut prev);
+        // saturating_sub: 100 - 5000 = 0
+        assert_eq!(rate.rx_bytes_per_sec, 0.0);
+        assert_eq!(rate.tx_bytes_per_sec, 0.0);
+    }
+
+    // ── compute_interface_rates ─────────────────
+
+    #[test]
+    fn test_interface_rates_first_call_returns_zero() {
+        let interfaces = vec![NetworkInterfaceInfo {
+            name: "eth0".to_string(),
+            rx_bytes: 1000,
+            tx_bytes: 2000,
+        }];
+        let mut prev_map = std::collections::HashMap::new();
+        let rates = compute_interface_rates(&interfaces, &mut prev_map);
+        assert_eq!(rates.len(), 1);
+        assert_eq!(rates[0].name, "eth0");
+        assert_eq!(rates[0].rx_bytes_per_sec, 0.0);
+        assert!(prev_map.contains_key("eth0"));
+    }
+
+    #[test]
+    fn test_interface_rates_delta_computation() {
+        let mut prev_map = std::collections::HashMap::new();
+        prev_map.insert(
+            "eth0".to_string(),
+            (1000u64, 2000u64, Instant::now() - Duration::from_secs(1)),
+        );
+        let interfaces = vec![NetworkInterfaceInfo {
+            name: "eth0".to_string(),
+            rx_bytes: 2000,
+            tx_bytes: 4000,
+        }];
+        let rates = compute_interface_rates(&interfaces, &mut prev_map);
+        assert!(rates[0].rx_bytes_per_sec > 900.0);
+        assert!(rates[0].tx_bytes_per_sec > 1900.0);
+    }
+
+    // ── collect_disk_alerts ─────────────────────
+
+    #[test]
+    fn test_disk_alert_fires_above_threshold() {
+        use crate::models::agent_metrics::DiskInfo;
+        let record = make_record();
+        let rule = MetricAlertRule {
+            enabled: true,
+            threshold: 90.0,
+            sustained_secs: 0,
+            cooldown_secs: 300,
+        };
+        let mut metrics = make_metrics(1.0, 10.0, vec![]);
+        metrics.system.disks = vec![DiskInfo {
+            name: "sda1".to_string(),
+            mount_point: "/".to_string(),
+            total_gb: 100.0,
+            available_gb: 5.0,
+            usage_percent: 95.0,
+            read_bytes_per_sec: 0.0,
+            write_bytes_per_sec: 0.0,
+        }];
+        let mut actions = Vec::new();
+        collect_disk_alerts(&record, TEST_HOSTNAME, &rule, &metrics, &mut actions);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(actions[0], AlertAction::DiskOverload { .. }));
+    }
+
+    #[test]
+    fn test_disk_alert_silent_below_threshold() {
+        use crate::models::agent_metrics::DiskInfo;
+        let record = make_record();
+        let rule = MetricAlertRule {
+            enabled: true,
+            threshold: 90.0,
+            sustained_secs: 0,
+            cooldown_secs: 300,
+        };
+        let mut metrics = make_metrics(1.0, 10.0, vec![]);
+        metrics.system.disks = vec![DiskInfo {
+            name: "sda1".to_string(),
+            mount_point: "/".to_string(),
+            total_gb: 100.0,
+            available_gb: 50.0,
+            usage_percent: 50.0,
+            read_bytes_per_sec: 0.0,
+            write_bytes_per_sec: 0.0,
+        }];
+        let mut actions = Vec::new();
+        collect_disk_alerts(&record, TEST_HOSTNAME, &rule, &metrics, &mut actions);
+        assert!(actions.is_empty());
+    }
+
+    #[test]
+    fn test_disk_alert_no_duplicate() {
+        use crate::models::agent_metrics::DiskInfo;
+        let mut record = make_record();
+        record
+            .alert_state
+            .disk_alerted
+            .insert("/".to_string(), true);
+        let rule = MetricAlertRule {
+            enabled: true,
+            threshold: 90.0,
+            sustained_secs: 0,
+            cooldown_secs: 300,
+        };
+        let mut metrics = make_metrics(1.0, 10.0, vec![]);
+        metrics.system.disks = vec![DiskInfo {
+            name: "sda1".to_string(),
+            mount_point: "/".to_string(),
+            total_gb: 100.0,
+            available_gb: 5.0,
+            usage_percent: 95.0,
+            read_bytes_per_sec: 0.0,
+            write_bytes_per_sec: 0.0,
+        }];
+        let mut actions = Vec::new();
+        collect_disk_alerts(&record, TEST_HOSTNAME, &rule, &metrics, &mut actions);
+        assert!(actions.is_empty());
+    }
+
+    #[test]
+    fn test_disk_recovery_fires() {
+        use crate::models::agent_metrics::DiskInfo;
+        let mut record = make_record();
+        record
+            .alert_state
+            .disk_alerted
+            .insert("/".to_string(), true);
+        let rule = MetricAlertRule {
+            enabled: true,
+            threshold: 90.0,
+            sustained_secs: 0,
+            cooldown_secs: 300,
+        };
+        let mut metrics = make_metrics(1.0, 10.0, vec![]);
+        metrics.system.disks = vec![DiskInfo {
+            name: "sda1".to_string(),
+            mount_point: "/".to_string(),
+            total_gb: 100.0,
+            available_gb: 50.0,
+            usage_percent: 50.0,
+            read_bytes_per_sec: 0.0,
+            write_bytes_per_sec: 0.0,
+        }];
+        let mut actions = Vec::new();
+        collect_disk_alerts(&record, TEST_HOSTNAME, &rule, &metrics, &mut actions);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(actions[0], AlertAction::DiskRecovery { .. }));
+    }
+
+    #[test]
+    fn test_disk_alert_disabled_rule() {
+        use crate::models::agent_metrics::DiskInfo;
+        let record = make_record();
+        let rule = MetricAlertRule {
+            enabled: false,
+            threshold: 90.0,
+            sustained_secs: 0,
+            cooldown_secs: 300,
+        };
+        let mut metrics = make_metrics(1.0, 10.0, vec![]);
+        metrics.system.disks = vec![DiskInfo {
+            name: "sda1".to_string(),
+            mount_point: "/".to_string(),
+            total_gb: 100.0,
+            available_gb: 5.0,
+            usage_percent: 95.0,
+            read_bytes_per_sec: 0.0,
+            write_bytes_per_sec: 0.0,
+        }];
+        let mut actions = Vec::new();
+        collect_disk_alerts(&record, TEST_HOSTNAME, &rule, &metrics, &mut actions);
+        assert!(actions.is_empty());
     }
 }
