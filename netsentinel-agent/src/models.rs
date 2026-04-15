@@ -134,6 +134,20 @@ pub(crate) struct PortStatus {
     pub is_open: bool,
 }
 
+/// Static system information returned by `GET /system-info`.
+/// Fetched on reconnection and every 24 hours — not included in the
+/// high-frequency `/metrics` bincode payload.
+#[derive(Serialize)]
+pub(crate) struct SystemInfoResponse {
+    pub os: String,
+    pub cpu_model: String,
+    pub memory_total_mb: u64,
+    /// System boot time as Unix timestamp (seconds since epoch)
+    pub boot_time: u64,
+    /// Primary IP address of the host
+    pub ip_address: String,
+}
+
 /// Intermediate bundle returned by `sysinfo_collector::collect_sysinfo`.
 /// Separated from `AgentMetrics` so the handler can assemble the final
 /// response from multiple parallel sources.

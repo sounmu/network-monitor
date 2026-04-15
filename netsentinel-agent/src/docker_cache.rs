@@ -122,19 +122,14 @@ pub(crate) async fn docker_event_listener(cache: DockerCache) {
 /// Calls the inspect API once for start/create events only; stop/die/pause update state
 /// in-cache to minimise Docker daemon API calls.
 async fn handle_docker_event(docker: &Docker, cache: &DockerCache, event: EventMessage) {
-    let action = match event.action.as_deref() {
-        Some(a) => a,
-        None => return,
+    let Some(action) = event.action.as_deref() else {
+        return;
     };
-
-    let actor = match &event.actor {
-        Some(a) => a,
-        None => return,
+    let Some(actor) = &event.actor else {
+        return;
     };
-
-    let container_id = match &actor.id {
-        Some(id) => id.as_str(),
-        None => return,
+    let Some(container_id) = actor.id.as_deref() else {
+        return;
     };
 
     let container_name = actor
@@ -292,6 +287,7 @@ pub(crate) async fn read_docker_cache(
 
 /// Background task that polls container resource stats every 10 seconds.
 /// Uses bollard's one-shot stats API to avoid maintaining per-container streaming connections.
+/// Docker client is created once and reused across cycles; reconnects only on error.
 pub(crate) async fn docker_stats_poller(
     lifecycle_cache: DockerCache,
     stats_cache: DockerStatsCache,
@@ -300,103 +296,125 @@ pub(crate) async fn docker_stats_poller(
     let _ = interval.tick().await; // skip first immediate tick
 
     loop {
-        interval.tick().await;
-
+        // Connect once, reuse across multiple poll cycles
         let docker = match Docker::connect_with_local_defaults() {
             Ok(d) => d,
-            Err(_) => continue,
-        };
-
-        // Get running container names from the lifecycle cache
-        let running: Vec<String> = {
-            let containers = lifecycle_cache.read().await;
-            containers
-                .iter()
-                .filter(|c| c.state == "running")
-                .take(50) // cap to avoid overwhelming the Docker daemon
-                .map(|c| c.container_name.clone())
-                .collect()
-        };
-
-        if running.is_empty() {
-            // Clear stale stats
-            let mut cache = stats_cache.write().await;
-            cache.clear();
-            continue;
-        }
-
-        // Poll stats for each running container concurrently
-        let futures = running.into_iter().map(|name| {
-            let docker = docker.clone();
-            async move {
-                let options = StatsOptions {
-                    stream: false,
-                    one_shot: true,
-                };
-                let mut stream = docker.stats(&name, Some(options));
-                let stats = match stream.next().await {
-                    Some(Ok(s)) => s,
-                    _ => return None,
-                };
-
-                // CPU%: delta of total_usage / delta of system_usage * num_cpus * 100
-                let cpu_percent = (|| -> Option<f32> {
-                    let cpu = stats.cpu_stats.as_ref()?;
-                    let precpu = stats.precpu_stats.as_ref()?;
-                    let cur_total = cpu.cpu_usage.as_ref()?.total_usage?;
-                    let pre_total = precpu.cpu_usage.as_ref()?.total_usage?;
-                    let cpu_delta = cur_total.saturating_sub(pre_total) as f64;
-                    let sys_delta = cpu
-                        .system_cpu_usage
-                        .unwrap_or(0)
-                        .saturating_sub(precpu.system_cpu_usage.unwrap_or(0))
-                        as f64;
-                    let num_cpus = cpu.online_cpus.unwrap_or(1) as f64;
-                    if sys_delta > 0.0 {
-                        Some((cpu_delta / sys_delta * num_cpus * 100.0) as f32)
-                    } else {
-                        Some(0.0)
-                    }
-                })()
-                .unwrap_or(0.0);
-
-                // Memory
-                let mem_stats = stats.memory_stats.as_ref();
-                let mem_usage_mb = mem_stats.and_then(|m| m.usage).unwrap_or(0) / 1024 / 1024;
-                let mem_limit_mb = mem_stats.and_then(|m| m.limit).unwrap_or(0) / 1024 / 1024;
-
-                // Network: sum all interface rx/tx
-                let (net_rx, net_tx) = stats
-                    .networks
-                    .as_ref()
-                    .map(|nets| {
-                        nets.values().fold((0u64, 0u64), |(rx, tx), n| {
-                            (rx + n.rx_bytes.unwrap_or(0), tx + n.tx_bytes.unwrap_or(0))
-                        })
-                    })
-                    .unwrap_or((0, 0));
-
-                Some(DockerContainerStats {
-                    container_name: name,
-                    cpu_percent,
-                    memory_usage_mb: mem_usage_mb,
-                    memory_limit_mb: mem_limit_mb,
-                    net_rx_bytes: net_rx,
-                    net_tx_bytes: net_tx,
-                })
+            Err(e) => {
+                tracing::warn!(err = ?e, "Docker stats connection failed, retrying in 10s");
+                interval.tick().await;
+                continue;
             }
-        });
+        };
 
-        let results: Vec<Option<DockerContainerStats>> =
-            futures_util::future::join_all(futures).await;
-
-        // Update the stats cache atomically
-        let mut cache = stats_cache.write().await;
-        cache.clear();
-        for stat in results.into_iter().flatten() {
-            cache.insert(stat.container_name.clone(), stat);
+        // Inner loop: reuse this docker client until an error forces reconnect
+        loop {
+            interval.tick().await;
+            if poll_container_stats(&docker, &lifecycle_cache, &stats_cache)
+                .await
+                .is_err()
+            {
+                break; // reconnect outer loop
+            }
         }
     }
+}
+
+/// Single poll cycle: fetch stats for all running containers.
+/// Returns Err(()) if the Docker client should be reconnected.
+async fn poll_container_stats(
+    docker: &Docker,
+    lifecycle_cache: &DockerCache,
+    stats_cache: &DockerStatsCache,
+) -> Result<(), ()> {
+    let running: Vec<String> = {
+        let containers = lifecycle_cache.read().await;
+        containers
+            .iter()
+            .filter(|c| c.state == "running")
+            .take(50)
+            .map(|c| c.container_name.clone())
+            .collect()
+    };
+
+    if running.is_empty() {
+        let mut cache = stats_cache.write().await;
+        cache.clear();
+        return Ok(());
+    }
+
+    let futures = running.into_iter().map(|name| {
+        let docker = docker.clone();
+        async move {
+            let options = StatsOptions {
+                stream: false,
+                one_shot: true,
+            };
+            let mut stream = docker.stats(&name, Some(options));
+            let stats = match stream.next().await {
+                Some(Ok(s)) => s,
+                _ => return None,
+            };
+
+            // CPU%: delta of total_usage / delta of system_usage * num_cpus * 100
+            let cpu_percent = (|| -> Option<f32> {
+                let cpu = stats.cpu_stats.as_ref()?;
+                let precpu = stats.precpu_stats.as_ref()?;
+                let cur_total = cpu.cpu_usage.as_ref()?.total_usage?;
+                let pre_total = precpu.cpu_usage.as_ref()?.total_usage?;
+                let cpu_delta = cur_total.saturating_sub(pre_total) as f64;
+                let sys_delta = cpu
+                    .system_cpu_usage
+                    .unwrap_or(0)
+                    .saturating_sub(precpu.system_cpu_usage.unwrap_or(0))
+                    as f64;
+                let num_cpus = cpu.online_cpus.unwrap_or(1) as f64;
+                if sys_delta > 0.0 {
+                    let pct = (cpu_delta / sys_delta * num_cpus * 100.0) as f32;
+                    Some(if pct.is_finite() { pct } else { 0.0 })
+                } else {
+                    Some(0.0)
+                }
+            })()
+            .unwrap_or(0.0);
+
+            // Memory
+            let mem_stats = stats.memory_stats.as_ref();
+            let mem_usage_mb = mem_stats.and_then(|m| m.usage).unwrap_or(0) / 1024 / 1024;
+            let mem_limit_mb = mem_stats.and_then(|m| m.limit).unwrap_or(0) / 1024 / 1024;
+
+            // Network: sum all interface rx/tx (cumulative)
+            let (net_rx, net_tx) = stats
+                .networks
+                .as_ref()
+                .map(|nets| {
+                    nets.values().fold((0u64, 0u64), |(rx, tx), n| {
+                        (rx + n.rx_bytes.unwrap_or(0), tx + n.tx_bytes.unwrap_or(0))
+                    })
+                })
+                .unwrap_or((0, 0));
+
+            Some(DockerContainerStats {
+                container_name: name,
+                cpu_percent,
+                memory_usage_mb: mem_usage_mb,
+                memory_limit_mb: mem_limit_mb,
+                net_rx_bytes: net_rx,
+                net_tx_bytes: net_tx,
+            })
+        }
+    });
+
+    let results: Vec<Option<DockerContainerStats>> = futures_util::future::join_all(futures).await;
+
+    // Atomic swap: build new map first, then replace to avoid readers seeing empty cache
+    let mut new_map = HashMap::with_capacity(results.len());
+    for stat in results.into_iter().flatten() {
+        new_map.insert(stat.container_name.clone(), stat);
+    }
+    let mut cache = stats_cache.write().await;
+    *cache = new_map;
+
+    Ok(())
 }
 
 /// Read container stats from the cache at metric collection time.

@@ -27,7 +27,7 @@ use tokio::sync::RwLock;
 use crate::docker_cache::{
     DockerCache, DockerStatsCache, docker_event_listener, docker_stats_poller, initial_docker_load,
 };
-use crate::handler::metrics_handler;
+use crate::handler::{metrics_handler, system_info_handler};
 use crate::models::MetricsQuery;
 
 #[tokio::main]
@@ -96,6 +96,7 @@ async fn main() -> anyhow::Result<()> {
                 }
             }),
         )
+        .route("/system-info", get(system_info_handler))
         .layer(compression)
         .layer(middleware::from_fn(auth::auth_middleware))
         // Health endpoint is outside the auth layer — no JWT required.

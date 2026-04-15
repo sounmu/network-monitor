@@ -1,15 +1,19 @@
-//! Request handler for `GET /metrics`.
+//! Request handlers for `GET /metrics` and `GET /system-info`.
 
+use axum::Json;
 use axum::extract::Query;
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use chrono::Utc;
 use chrono_tz::Asia::Seoul;
+use sysinfo::System;
 
 use crate::docker_cache::{DockerCache, DockerStatsCache, read_docker_cache, read_docker_stats};
-use crate::models::{AgentMetrics, MetricsQuery, SystemMetrics};
+use crate::models::{AgentMetrics, MetricsQuery, SystemInfoResponse, SystemMetrics};
 use crate::ports::{collect_ports, parse_comma_separated_ports};
 use crate::sysinfo_collector::collect_sysinfo;
+
+const AGENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[tracing::instrument(skip(docker_cache, docker_stats_cache, query))]
 pub(crate) async fn metrics_handler(
@@ -18,12 +22,13 @@ pub(crate) async fn metrics_handler(
     docker_stats_cache: DockerStatsCache,
     query: Query<MetricsQuery>,
 ) -> Response {
-    // Ports are managed server-side and sent via query param
-    let monitor_ports = query
+    // Ports are managed server-side and sent via query param (capped at 100 to prevent DoS)
+    let mut monitor_ports = query
         .ports
         .as_ref()
         .map(|p| parse_comma_separated_ports(p))
         .unwrap_or_default();
+    monitor_ports.truncate(100);
 
     let target_containers = query
         .containers
@@ -73,7 +78,7 @@ pub(crate) async fn metrics_handler(
         load_average: sys_result.load_average,
         docker: docker_containers,
         ports: port_statuses,
-        agent_version: env!("CARGO_PKG_VERSION").to_string(),
+        agent_version: AGENT_VERSION.to_string(),
         cpu_cores: sys_result.cpu_cores,
         network_interfaces: sys_result.network_interfaces,
         docker_stats,
@@ -91,4 +96,60 @@ pub(crate) async fn metrics_handler(
     };
 
     ([(header::CONTENT_TYPE, "application/octet-stream")], bytes).into_response()
+}
+
+/// GET /system-info — static system information (OS, CPU model, IP, boot time, total RAM).
+/// Called infrequently (on reconnection + every 24h) so JSON is fine.
+#[tracing::instrument]
+pub(crate) async fn system_info_handler() -> Json<SystemInfoResponse> {
+    let info = tokio::task::spawn_blocking(|| {
+        let mut sys = System::new();
+        sys.refresh_cpu_usage();
+        sys.refresh_memory();
+
+        let os = System::long_os_version().unwrap_or_else(|| "Unknown".to_string());
+        let cpu_model = sys
+            .cpus()
+            .first()
+            .map(|c| c.brand().to_string())
+            .unwrap_or_else(|| "Unknown".to_string());
+        let memory_total_mb = sys.total_memory() / 1024 / 1024;
+        let boot_time = System::boot_time();
+        let ip_address = get_primary_ip();
+
+        SystemInfoResponse {
+            os,
+            cpu_model,
+            memory_total_mb,
+            boot_time,
+            ip_address,
+        }
+    })
+    .await
+    .unwrap_or_else(|e| {
+        tracing::error!(err = ?e, "❌ [SystemInfo] spawn_blocking panicked");
+        SystemInfoResponse {
+            os: "Unknown".to_string(),
+            cpu_model: "Unknown".to_string(),
+            memory_total_mb: 0,
+            boot_time: 0,
+            ip_address: "Unknown".to_string(),
+        }
+    });
+
+    Json(info)
+}
+
+/// Determine the primary IP address by creating a UDP socket aimed at a
+/// public address. No data is actually sent — the OS routing table selects
+/// the source interface, giving us the default outbound IP.
+fn get_primary_ip() -> String {
+    std::net::UdpSocket::bind("0.0.0.0:0")
+        .ok()
+        .and_then(|s| {
+            s.connect("8.8.8.8:80").ok()?;
+            s.local_addr().ok()
+        })
+        .map(|addr| addr.ip().to_string())
+        .unwrap_or_else(|| "unknown".to_string())
 }

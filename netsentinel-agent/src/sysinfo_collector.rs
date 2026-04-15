@@ -5,15 +5,10 @@
 //! runs in parallel on its own blocking task so its sampling window
 //! overlaps with the CPU delta sleeps.
 
-use std::time::Duration;
-use sysinfo::{Components, Disks, Networks, System};
-
-#[cfg(target_os = "linux")]
 use std::collections::HashMap;
-#[cfg(target_os = "linux")]
-use std::sync::Mutex;
-#[cfg(target_os = "linux")]
-use std::time::Instant;
+use std::sync::{LazyLock, Mutex};
+use std::time::{Duration, Instant};
+use sysinfo::{Components, DiskUsage, Disks, Networks, System};
 
 use crate::gpu;
 use crate::models::{
@@ -45,63 +40,48 @@ fn is_physical_interface(name: &str) -> bool {
 }
 
 /// Previous disk I/O counters for delta calculation, keyed by device name.
-#[cfg(target_os = "linux")]
 type DiskIoPrev = HashMap<String, (u64, u64, Instant)>;
-#[cfg(target_os = "linux")]
-static DISK_IO_PREV: Mutex<Option<DiskIoPrev>> = Mutex::new(None);
+static DISK_IO_PREV: LazyLock<Mutex<DiskIoPrev>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
-/// Read disk I/O stats from `/sys/block/{dev}/stat` (Linux only).
-/// Returns (read_bytes, write_bytes) for the given device, or None on non-Linux / error.
-#[cfg(target_os = "linux")]
-fn read_disk_io_bytes(dev_name: &str) -> Option<(u64, u64)> {
-    // sysfs stat format: 11+ space-separated fields
-    // Field 2 (0-indexed): sectors read, Field 6: sectors written
-    // Each sector = 512 bytes
-    let path = format!("/sys/block/{}/stat", dev_name);
-    let content = std::fs::read_to_string(&path).ok()?;
-    let fields: Vec<&str> = content.split_whitespace().collect();
-    if fields.len() < 7 {
-        return None;
-    }
-    let sectors_read: u64 = fields[2].parse().ok()?;
-    let sectors_written: u64 = fields[6].parse().ok()?;
-    Some((sectors_read * 512, sectors_written * 512))
-}
+/// Compute per-disk read/write bytes per second using sysinfo's cumulative counters.
+/// Cross-platform: works on Linux, macOS, and Windows via `Disk::usage()`.
+fn compute_disk_io(dev_name: &str, usage: &DiskUsage) -> (f64, f64) {
+    let read_bytes = usage.total_read_bytes;
+    let write_bytes = usage.total_written_bytes;
+    let now = Instant::now();
 
-/// Compute per-disk read/write bytes per second using delta from previous sample.
-#[cfg(not(target_os = "linux"))]
-fn compute_disk_io(_dev_name: &str) -> (f64, f64) {
-    (0.0, 0.0)
-}
+    let mut prev_map = DISK_IO_PREV.lock().unwrap_or_else(|e| {
+        tracing::warn!("DISK_IO_PREV mutex was poisoned, recovering");
+        e.into_inner()
+    });
 
-#[cfg(target_os = "linux")]
-fn compute_disk_io(dev_name: &str) -> (f64, f64) {
-    {
-        let Some((read_bytes, write_bytes)) = read_disk_io_bytes(dev_name) else {
-            return (0.0, 0.0);
-        };
-
-        let now = Instant::now();
-        let mut guard = DISK_IO_PREV.lock().unwrap_or_else(|e| e.into_inner());
-        let prev_map = guard.get_or_insert_with(HashMap::new);
-
-        let result = if let Some((prev_r, prev_w, prev_t)) = prev_map.get(dev_name) {
-            let elapsed = now.duration_since(*prev_t).as_secs_f64();
-            if elapsed > 0.0 {
-                (
-                    read_bytes.saturating_sub(*prev_r) as f64 / elapsed,
-                    write_bytes.saturating_sub(*prev_w) as f64 / elapsed,
-                )
-            } else {
-                (0.0, 0.0)
-            }
+    let result = if let Some((prev_r, prev_w, prev_t)) = prev_map.get(dev_name) {
+        let elapsed = now.duration_since(*prev_t).as_secs_f64();
+        if elapsed > 0.0 {
+            (
+                read_bytes.saturating_sub(*prev_r) as f64 / elapsed,
+                write_bytes.saturating_sub(*prev_w) as f64 / elapsed,
+            )
         } else {
             (0.0, 0.0)
-        };
+        }
+    } else {
+        (0.0, 0.0)
+    };
 
-        prev_map.insert(dev_name.to_string(), (read_bytes, write_bytes, now));
-        result
-    }
+    prev_map.insert(dev_name.to_string(), (read_bytes, write_bytes, now));
+    result
+}
+
+/// Remove stale entries from the disk I/O delta cache (hot-swapped devices).
+fn prune_disk_io_cache(disks: &Disks) {
+    use std::collections::HashSet;
+    let current_devs: HashSet<String> = disks
+        .iter()
+        .map(|d| extract_block_device(&d.name().to_string_lossy()))
+        .collect();
+    let mut prev_map = DISK_IO_PREV.lock().unwrap_or_else(|e| e.into_inner());
+    prev_map.retain(|k, _| current_devs.contains(k));
 }
 
 /// Extract the block device name from a disk path (e.g., "/dev/sda1" → "sda").
@@ -112,6 +92,7 @@ fn extract_block_device(disk_name: &str) -> String {
     if name.starts_with("nvme") {
         // NVMe: nvme0n1p1 → nvme0n1 (let chain: collapsible if)
         if let Some(idx) = name.rfind('p')
+            && !name[idx + 1..].is_empty()
             && name[idx + 1..].chars().all(|c| c.is_ascii_digit())
             && idx > 0
         {
@@ -168,14 +149,14 @@ pub(crate) async fn collect_sysinfo() -> SysinfoResult {
 
         // Disks (capacity + I/O)
         let disks_raw = Disks::new_with_refreshed_list();
-        let disks = disks_raw
+        let disks: Vec<DiskInfo> = disks_raw
             .iter()
             .map(|disk| {
                 let total_bytes = disk.total_space();
                 let available_bytes = disk.available_space();
                 let used_bytes = total_bytes.saturating_sub(available_bytes);
                 let dev_name = extract_block_device(&disk.name().to_string_lossy());
-                let (read_bps, write_bps) = compute_disk_io(&dev_name);
+                let (read_bps, write_bps) = compute_disk_io(&dev_name, &disk.usage());
                 DiskInfo {
                     name: disk.name().to_string_lossy().into_owned(),
                     mount_point: disk.mount_point().to_string_lossy().into_owned(),
@@ -191,6 +172,8 @@ pub(crate) async fn collect_sysinfo() -> SysinfoResult {
                 }
             })
             .collect();
+        // Prune stale entries from disk I/O cache (hot-swapped devices)
+        prune_disk_io_cache(&disks_raw);
 
         // Aggregate physical interface traffic + per-interface breakdown.
         let nets = Networks::new_with_refreshed_list();
@@ -227,12 +210,25 @@ pub(crate) async fn collect_sysinfo() -> SysinfoResult {
                 memory_mb: p.memory() / 1024 / 1024,
             })
             .collect();
-        process_list.sort_by(|a, b| {
-            b.cpu_usage
-                .partial_cmp(&a.cpu_usage)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-        process_list.truncate(10);
+        if process_list.len() > 10 {
+            process_list.select_nth_unstable_by(9, |a, b| {
+                b.cpu_usage
+                    .partial_cmp(&a.cpu_usage)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            process_list.truncate(10);
+            process_list.sort_by(|a, b| {
+                b.cpu_usage
+                    .partial_cmp(&a.cpu_usage)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+        } else {
+            process_list.sort_by(|a, b| {
+                b.cpu_usage
+                    .partial_cmp(&a.cpu_usage)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+        }
 
         // Temperature sensors
         let components = Components::new_with_refreshed_list();
