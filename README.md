@@ -40,7 +40,7 @@ graph LR
 **Data flow:**
 1. Server scrapes each registered agent every 10 s (configurable), batch-inserts metrics in a single query
 2. Metrics stored in TimescaleDB hypertable (90-day retention) + 5-min continuous aggregate for fast long-range queries
-3. Browser connects to SSE stream for real-time updates (10 s push, in-memory — no DB hit, rAF-batched)
+3. Browser connects to SSE stream for real-time updates (10 s push, in-memory — no DB hit, rAF-batched). SSE `metrics` event includes CPU, memory, load, network, disks, temperatures, and Docker stats for live chart overlay
 4. REST API with automatic downsampling: ≤6h raw, 6h-3d 1-min, 3d-14d 5-min (CA), >14d 15-min (CA)
 5. Alerts delivered to Discord, Slack, and/or Email channels
 
@@ -168,7 +168,7 @@ cargo run
 
 ## API Endpoints
 
-All endpoints require `Authorization: Bearer <JWT>` unless noted. Mutation endpoints require admin role.
+All endpoints require `Authorization: Bearer <JWT>` unless noted. Read endpoints use `UserGuard` (rejects agent JWTs). Mutation endpoints require `AdminGuard` (admin role only).
 
 | Method | Path | Description |
 |---|---|---|
@@ -214,7 +214,10 @@ All endpoints require `Authorization: Bearer <JWT>` unless noted. Mutation endpo
 | `GET` | `/api/ping-monitors/{id}/results` | Ping check results |
 | `GET` | `/api/public/status` | Public status page data **(no auth)** |
 | `GET` | `/metrics` | Prometheus metrics export **(no auth)** |
-| `GET` | `/api/stream?key=<JWT>` | SSE stream (`metrics` + `status`) |
+| `POST` | `/api/auth/logout` | Revoke all tokens for current user |
+| `POST` | `/api/auth/sse-ticket` | Mint single-use ticket for SSE |
+| `POST` | `/api/admin/users/{id}/revoke-sessions` | Admin: force-revoke user sessions |
+| `GET` | `/api/stream?key=<ticket>` | SSE stream (`metrics` + `status`) |
 
 ---
 
@@ -224,7 +227,7 @@ All endpoints require `Authorization: Bearer <JWT>` unless noted. Mutation endpo
 |---|---|
 | **`metrics`** | TimescaleDB hypertable, 90-day retention, 1-day chunks, compression after 7 days. Stores CPU, memory, load, network, disk, process, temperature, GPU, Docker, port data as JSONB. |
 | **`metrics_5min`** | Continuous aggregate over `metrics`. 5-min buckets with AVG (cpu/memory/load), MAX (network bytes), bool_and (online), COUNT (samples). 90-day refresh policy. |
-| **`hosts`** | Agent registry (scrape interval, thresholds, monitored ports/containers) |
+| **`hosts`** | Agent registry (scrape interval, thresholds, monitored ports/containers, system info: OS/CPU/RAM/IP) |
 | **`alert_configs`** | Alert rules; `NULL host_key` = global default, per-host rows override. Supports cpu/memory/disk metric types. |
 | **`notification_channels`** | Alert delivery targets (Discord webhook, Slack webhook, Email SMTP). Config stored as JSONB. |
 | **`dashboard_layouts`** | Per-user dashboard widget layout (JSONB). |
