@@ -485,8 +485,10 @@ pub async fn fetch_metrics_range(
         .await?;
         Ok(rows)
     } else if hours <= 336 {
-        // Long range (3d–14d): read directly from metrics_5min continuous aggregate.
+        // Long range (6h–14d): read directly from metrics_5min continuous aggregate.
         // No GROUP BY needed — CA bucket size matches exactly.
+        // JSONB snapshot columns (disks, temperatures, gpus, docker_stats) are
+        // stored via last(col, timestamp) in the CA — preserves per-element detail.
         let rows = sqlx::query_as::<_, MetricsRow>(
             r#"
             SELECT
@@ -503,13 +505,13 @@ pub async fn fetch_metrics_range(
                 ) AS networks,
                 NULL::jsonb AS docker_containers,
                 NULL::jsonb AS ports,
-                NULL::jsonb AS disks,
+                disks,
                 NULL::jsonb AS processes,
-                NULL::jsonb AS temperatures,
-                NULL::jsonb AS gpus,
+                temperatures,
+                gpus,
                 NULL::jsonb AS cpu_cores,
                 NULL::jsonb AS network_interfaces,
-                NULL::jsonb AS docker_stats,
+                docker_stats,
                 bucket AS timestamp
             FROM metrics_5min
             WHERE host_key = $1
@@ -527,6 +529,8 @@ pub async fn fetch_metrics_range(
     } else {
         // Very long range (>14d): re-aggregate metrics_5min into 15-min buckets.
         // Reads ~8,640 pre-aggregated rows instead of millions of raw rows.
+        // JSONB snapshots: last() picks the most recent 5-min bucket within
+        // each 15-min window — a representative snapshot, not an average.
         let rows = sqlx::query_as::<_, MetricsRow>(
             r#"
             SELECT
@@ -545,13 +549,13 @@ pub async fn fetch_metrics_range(
                 ) AS networks,
                 NULL::jsonb AS docker_containers,
                 NULL::jsonb AS ports,
-                NULL::jsonb AS disks,
+                last(disks, bucket) AS disks,
                 NULL::jsonb AS processes,
-                NULL::jsonb AS temperatures,
-                NULL::jsonb AS gpus,
+                last(temperatures, bucket) AS temperatures,
+                last(gpus, bucket) AS gpus,
                 NULL::jsonb AS cpu_cores,
                 NULL::jsonb AS network_interfaces,
-                NULL::jsonb AS docker_stats,
+                last(docker_stats, bucket) AS docker_stats,
                 time_bucket('15 minutes', bucket) AS timestamp
             FROM metrics_5min
             WHERE host_key = $1
