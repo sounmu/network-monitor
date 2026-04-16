@@ -80,7 +80,11 @@ pub async fn api_rate_limit(
     request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> Response {
-    let ip = peer_addr.ip().to_string();
+    let ip = crate::handlers::auth_handler::extract_client_ip(
+        request.headers(),
+        &peer_addr,
+        state.trusted_proxy_count,
+    );
     if let Err(retry_after) = state.api_rate_limiter.check(&ip) {
         return (
             StatusCode::TOO_MANY_REQUESTS,

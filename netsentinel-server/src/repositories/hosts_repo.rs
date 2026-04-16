@@ -163,7 +163,9 @@ pub async fn update_system_info(
     Ok(())
 }
 
-/// Auto-register a host on first metric receipt; updates display_name if already present
+/// Auto-register a host on first metric receipt.
+/// Only updates display_name if it was empty/null — prevents a compromised agent
+/// from overwriting an admin-set name (SS-15).
 pub async fn ensure_host_registered(
     pool: &PgPool,
     host_key: &str,
@@ -174,7 +176,11 @@ pub async fn ensure_host_registered(
         INSERT INTO hosts (host_key, display_name)
         VALUES ($1, $2)
         ON CONFLICT (host_key) DO UPDATE SET
-            display_name = EXCLUDED.display_name,
+            display_name = CASE
+                WHEN hosts.display_name = '' OR hosts.display_name IS NULL
+                THEN EXCLUDED.display_name
+                ELSE hosts.display_name
+            END,
             updated_at = NOW()
         "#,
     )

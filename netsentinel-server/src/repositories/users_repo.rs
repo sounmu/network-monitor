@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
+use sqlx::{PgPool, Postgres};
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct UserRow {
@@ -73,8 +73,9 @@ pub async fn find_by_id(pool: &PgPool, user_id: i32) -> Result<Option<UserRow>, 
         .await
 }
 
-pub async fn create_user(
-    pool: &PgPool,
+/// Create a user. Accepts both `&PgPool` and `&mut Transaction` as executor.
+pub async fn create_user<'e, E: sqlx::Executor<'e, Database = Postgres>>(
+    executor: E,
     username: &str,
     password_hash: &str,
     role: &str,
@@ -89,7 +90,7 @@ pub async fn create_user(
     .bind(username)
     .bind(password_hash)
     .bind(role)
-    .fetch_one(pool)
+    .fetch_one(executor)
     .await
 }
 

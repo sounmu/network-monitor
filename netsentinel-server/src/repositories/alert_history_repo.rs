@@ -67,7 +67,7 @@ pub async fn get_alert_history(
     query: &AlertHistoryQuery,
 ) -> Result<Vec<AlertHistoryRow>, sqlx::Error> {
     let limit = query.limit.unwrap_or(50).min(200);
-    let offset = query.offset.unwrap_or(0);
+    let offset = query.offset.unwrap_or(0).min(10_000); // cap to prevent expensive scans
 
     if let Some(ref hk) = query.host_key {
         sqlx::query_as::<_, AlertHistoryRow>(

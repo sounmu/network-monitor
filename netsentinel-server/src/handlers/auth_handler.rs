@@ -62,11 +62,14 @@ fn build_refresh_cookie_expiry() -> String {
 }
 
 /// Pull the refresh token plaintext out of a `Cookie` request header.
+/// Prefix for the refresh cookie — const avoids a format!() allocation per call.
+const REFRESH_COOKIE_PREFIX: &str = "nm_refresh=";
+
 fn extract_refresh_cookie(headers: &HeaderMap) -> Option<String> {
     let raw = headers.get("cookie")?.to_str().ok()?;
     for segment in raw.split(';') {
         let trimmed = segment.trim();
-        if let Some(rest) = trimmed.strip_prefix(&format!("{REFRESH_COOKIE_NAME}=")) {
+        if let Some(rest) = trimmed.strip_prefix(REFRESH_COOKIE_PREFIX) {
             return Some(rest.to_string());
         }
     }
@@ -108,7 +111,7 @@ pub struct LoginResponse {
 /// and uses the peer socket address. When `> 0`, takes the Nth IP from the
 /// **right** of X-Forwarded-For (proxies append left-to-right, so the rightmost
 /// entries are from infrastructure the operator controls).
-fn extract_client_ip(
+pub(crate) fn extract_client_ip(
     headers: &HeaderMap,
     peer_addr: &SocketAddr,
     trusted_proxy_count: usize,
@@ -153,7 +156,12 @@ pub async fn login(
         .await?
         .ok_or_else(|| AppError::Unauthorized("Invalid username or password".to_string()))?;
 
-    if !user_auth::verify_password(&body.password, &user.password_hash) {
+    let password = body.password.clone();
+    let hash = user.password_hash.clone();
+    let valid = tokio::task::spawn_blocking(move || user_auth::verify_password(&password, &hash))
+        .await
+        .map_err(|e| AppError::Internal(format!("Password verify task failed: {e:#}")))?;
+    if !valid {
         return Err(AppError::Unauthorized(
             "Invalid username or password".to_string(),
         ));
@@ -254,20 +262,10 @@ pub async fn refresh(
 
 /// GET /api/auth/me — return current user info from JWT
 pub async fn me(
-    _auth: UserGuard,
+    auth: UserGuard,
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
 ) -> Result<Json<UserInfo>, AppError> {
-    let token = headers
-        .get("Authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|h| h.strip_prefix("Bearer "))
-        .ok_or_else(|| AppError::Unauthorized("Missing token".to_string()))?;
-
-    let claims = user_auth::decode_user_jwt(token)
-        .ok_or_else(|| AppError::Unauthorized("Invalid user token".to_string()))?;
-
-    let user = users_repo::find_by_username(&state.db_pool, &claims.username)
+    let user = users_repo::find_by_username(&state.db_pool, &auth.claims.username)
         .await?
         .ok_or_else(|| AppError::Unauthorized("User no longer exists".to_string()))?;
 
@@ -282,6 +280,9 @@ pub struct SetupRequest {
 
 /// POST /api/auth/setup — create initial admin account (only when no users exist)
 ///
+/// Uses a transaction to prevent TOCTOU race (two concurrent requests
+/// both passing the `count == 0` check and creating separate admin accounts).
+///
 /// Parallel to `login`: returns an access JWT in the body AND installs a
 /// refresh cookie, so the first admin is immediately logged in with the
 /// full rotating-session contract active.
@@ -291,24 +292,40 @@ pub async fn setup(
     ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
     Json(body): Json<SetupRequest>,
 ) -> Result<Response, AppError> {
-    let count = users_repo::count_users(&state.db_pool).await?;
+    if body.username.is_empty() {
+        return Err(AppError::BadRequest("Username is required".to_string()));
+    }
+    validate_password(&body.password)?;
+
+    let password = body.password.clone();
+    let password_hash = tokio::task::spawn_blocking(move || user_auth::hash_password(&password))
+        .await
+        .map_err(|e| AppError::Internal(format!("Hash task failed: {e:#}")))?
+        .map_err(|e| AppError::Internal(format!("Failed to hash password: {e:#}")))?;
+
+    // Transaction prevents TOCTOU: count check + insert are atomic.
+    let mut tx = state
+        .db_pool
+        .begin()
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to begin transaction: {e:#}")))?;
+
+    let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*)::BIGINT FROM users")
+        .fetch_one(&mut *tx)
+        .await?;
     if count > 0 {
         return Err(AppError::BadRequest(
             "Setup already completed. Use login instead.".to_string(),
         ));
     }
 
-    if body.username.is_empty() {
-        return Err(AppError::BadRequest("Username is required".to_string()));
-    }
-    validate_password(&body.password)?;
-
-    let password_hash = user_auth::hash_password(&body.password)
-        .map_err(|e| AppError::Internal(format!("Failed to hash password: {}", e)))?;
-
-    let user = users_repo::create_user(&state.db_pool, &body.username, &password_hash, "admin")
+    let user = users_repo::create_user(&mut *tx, &body.username, &password_hash, "admin")
         .await
-        .map_err(|e| AppError::Internal(format!("Failed to create user: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to create user: {e:#}")))?;
+
+    tx.commit()
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to commit transaction: {e:#}")))?;
 
     let access_token = user_auth::generate_user_jwt(user.id, &user.username, &user.role)?;
     let user_agent = extract_user_agent(&headers);
@@ -346,36 +363,39 @@ pub struct ChangePasswordRequest {
     pub new_password: String,
 }
 
-/// PUT /api/auth/password — change current user's password (admin only)
+/// PUT /api/auth/password — change current user's password
+///
+/// Uses `UserGuard` (not `AdminGuard`) so all users can rotate their own
+/// password. The handler still verifies the current password before accepting.
 pub async fn change_password(
-    _admin: AdminGuard,
+    auth: UserGuard,
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
     Json(body): Json<ChangePasswordRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     validate_password(&body.new_password)?;
 
-    let token = headers
-        .get("Authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|h| h.strip_prefix("Bearer "))
-        .ok_or_else(|| AppError::Unauthorized("Missing token".to_string()))?;
-
-    let claims = user_auth::decode_user_jwt(token)
-        .ok_or_else(|| AppError::Unauthorized("Invalid token".to_string()))?;
-
-    let user = users_repo::find_by_username(&state.db_pool, &claims.username)
+    let user = users_repo::find_by_username(&state.db_pool, &auth.claims.username)
         .await?
         .ok_or_else(|| AppError::Unauthorized("User not found".to_string()))?;
 
-    if !user_auth::verify_password(&body.current_password, &user.password_hash) {
+    let current_password = body.current_password.clone();
+    let stored_hash = user.password_hash.clone();
+    let valid = tokio::task::spawn_blocking(move || {
+        user_auth::verify_password(&current_password, &stored_hash)
+    })
+    .await
+    .map_err(|e| AppError::Internal(format!("Password verify task failed: {e:#}")))?;
+    if !valid {
         return Err(AppError::Unauthorized(
             "Current password is incorrect".to_string(),
         ));
     }
 
-    let new_hash = user_auth::hash_password(&body.new_password)
-        .map_err(|e| AppError::Internal(format!("Failed to hash password: {e}")))?;
+    let new_password = body.new_password.clone();
+    let new_hash = tokio::task::spawn_blocking(move || user_auth::hash_password(&new_password))
+        .await
+        .map_err(|e| AppError::Internal(format!("Hash task failed: {e:#}")))?
+        .map_err(|e| AppError::Internal(format!("Failed to hash password: {e:#}")))?;
 
     users_repo::update_password(&state.db_pool, user.id, &new_hash).await?;
 
@@ -455,10 +475,11 @@ pub async fn logout(
 /// employee, incident response. The admin's own session is unaffected
 /// unless they pass their own user id.
 pub async fn admin_revoke_user_sessions(
-    _admin: AdminGuard,
+    admin: AdminGuard,
     State(state): State<Arc<AppState>>,
     axum::extract::Path(user_id): axum::extract::Path<i32>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    let _ = &admin.claims; // used for audit logging below
     // Confirm the target user exists so callers get a 404 instead of a
     // silent success against a non-existent id.
     if users_repo::find_by_id(&state.db_pool, user_id)
@@ -476,6 +497,7 @@ pub async fn admin_revoke_user_sessions(
     }
 
     tracing::warn!(
+        admin = %admin.claims.username,
         target_user_id = user_id,
         "🔐 [Auth] Admin force-revoked all sessions for user"
     );
@@ -498,20 +520,10 @@ pub struct SseTicketResponse {
 /// bound to the caller's `user_id` and is consumed atomically on the SSE handshake.
 /// See `services::sse_ticket` for rationale.
 pub async fn issue_sse_ticket(
-    _auth: UserGuard,
+    auth: UserGuard,
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
 ) -> Result<Json<SseTicketResponse>, AppError> {
-    let token = headers
-        .get("Authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|h| h.strip_prefix("Bearer "))
-        .ok_or_else(|| AppError::Unauthorized("Missing token".to_string()))?;
-
-    let claims = user_auth::decode_user_jwt(token)
-        .ok_or_else(|| AppError::Unauthorized("Invalid user token".to_string()))?;
-
-    let ticket = state.sse_ticket_store.issue(claims.sub);
+    let ticket = state.sse_ticket_store.issue(auth.claims.sub);
 
     Ok(Json(SseTicketResponse {
         ticket,

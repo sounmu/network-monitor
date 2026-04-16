@@ -105,8 +105,10 @@ pub fn generate_jwt() -> Result<String, AppError> {
 
 /// Axum extractor that only accepts **user** JWTs (aud: "user").
 /// Agent JWTs are rejected — agents should only be accessed via the scraping path.
-/// Use this instead of `AuthGuard` on all user-facing read endpoints.
-pub struct UserGuard;
+/// Carries decoded claims so handlers can access user info without re-parsing the token.
+pub struct UserGuard {
+    pub claims: super::user_auth::UserClaims,
+}
 
 impl<S> FromRequestParts<S> for UserGuard
 where
@@ -132,13 +134,16 @@ where
             return Err(AppError::Unauthorized("Token revoked".to_string()));
         }
 
-        Ok(UserGuard)
+        Ok(UserGuard { claims })
     }
 }
 
 /// Axum extractor that enforces admin-only access.
 /// Only user JWTs with role == "admin" are accepted. Agent JWTs are rejected.
-pub struct AdminGuard;
+/// Carries decoded claims so handlers can access user info without re-parsing the token.
+pub struct AdminGuard {
+    pub claims: super::user_auth::UserClaims,
+}
 
 impl<S> FromRequestParts<S> for AdminGuard
 where
@@ -168,7 +173,7 @@ where
             return Err(AppError::Unauthorized("Admin access required".to_string()));
         }
 
-        Ok(AdminGuard)
+        Ok(AdminGuard { claims })
     }
 }
 

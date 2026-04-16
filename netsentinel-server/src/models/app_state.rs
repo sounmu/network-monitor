@@ -353,6 +353,25 @@ impl LoginRateLimiter {
         entry.push_back(now);
         Ok(())
     }
+
+    /// Remove entries whose all timestamps have expired.
+    /// Call periodically from a background task to prevent unbounded HashMap growth.
+    pub fn evict_stale(&self) {
+        if let Ok(mut map) = self.attempts.write() {
+            let now = Instant::now();
+            map.retain(|_, deque| {
+                // Drain expired timestamps from the front
+                while let Some(front) = deque.front() {
+                    if now.duration_since(*front) > self.window {
+                        deque.pop_front();
+                    } else {
+                        break;
+                    }
+                }
+                !deque.is_empty()
+            });
+        }
+    }
 }
 
 #[cfg(test)]

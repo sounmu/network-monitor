@@ -36,14 +36,15 @@ impl std::error::Error for AppError {}
 /// Automatically convert standard fmt errors into AppError::Internal
 impl From<std::fmt::Error> for AppError {
     fn from(err: std::fmt::Error) -> Self {
-        AppError::Internal(err.to_string())
+        AppError::Internal(format!("{err:#}"))
     }
 }
 
-/// Automatically convert sqlx DB errors into AppError::Internal
+/// Automatically convert sqlx DB errors into AppError::Internal.
+/// Uses `{err:#}` (alternate Display) to include the full error chain.
 impl From<sqlx::Error> for AppError {
     fn from(err: sqlx::Error) -> Self {
-        AppError::Internal(format!("Database error: {}", err))
+        AppError::Internal(format!("Database error: {err:#}"))
     }
 }
 

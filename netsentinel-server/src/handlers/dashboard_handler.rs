@@ -2,37 +2,18 @@ use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::State;
-use axum::http::HeaderMap;
 
 use crate::errors::AppError;
 use crate::models::app_state::AppState;
 use crate::repositories::dashboard_repo::{self, DashboardLayout};
 use crate::services::auth::UserGuard;
-use crate::services::user_auth;
-
-/// Extract user_id from the Authorization header (user JWT only)
-fn extract_user_id(headers: &HeaderMap) -> Result<i32, AppError> {
-    let token = headers
-        .get("Authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|h| h.strip_prefix("Bearer "))
-        .ok_or_else(|| AppError::Unauthorized("Missing token".to_string()))?;
-
-    let claims = user_auth::decode_user_jwt(token).ok_or_else(|| {
-        AppError::BadRequest("Dashboard requires user authentication (not API key)".to_string())
-    })?;
-
-    Ok(claims.sub)
-}
 
 /// GET /api/dashboard — get current user's dashboard layout
 pub async fn get_dashboard(
-    _auth: UserGuard,
+    auth: UserGuard,
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let user_id = extract_user_id(&headers)?;
-    let layout = dashboard_repo::get_layout(&state.db_pool, user_id).await?;
+    let layout = dashboard_repo::get_layout(&state.db_pool, auth.claims.sub).await?;
     match layout {
         Some(l) => Ok(Json(l.widgets)),
         None => Ok(Json(serde_json::json!([]))),
@@ -45,13 +26,23 @@ pub struct SaveDashboardRequest {
 }
 
 /// PUT /api/dashboard — save current user's dashboard layout
+///
+/// Validates that the widget payload is not excessively large (max 64 KB).
 pub async fn save_dashboard(
-    _auth: UserGuard,
+    auth: UserGuard,
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
     Json(body): Json<SaveDashboardRequest>,
 ) -> Result<Json<DashboardLayout>, AppError> {
-    let user_id = extract_user_id(&headers)?;
-    let layout = dashboard_repo::upsert_layout(&state.db_pool, user_id, &body.widgets).await?;
+    // SS-11: Validate widget payload size to prevent abuse
+    let serialized = serde_json::to_string(&body.widgets)
+        .map_err(|e| AppError::BadRequest(format!("Invalid widgets JSON: {e}")))?;
+    if serialized.len() > 64 * 1024 {
+        return Err(AppError::BadRequest(
+            "Dashboard layout too large (max 64 KB)".to_string(),
+        ));
+    }
+
+    let layout =
+        dashboard_repo::upsert_layout(&state.db_pool, auth.claims.sub, &body.widgets).await?;
     Ok(Json(layout))
 }

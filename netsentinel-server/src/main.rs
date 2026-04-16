@@ -191,6 +191,20 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
+    // Background task: evict stale rate limiter entries every 5 minutes.
+    // Prevents unbounded HashMap growth from unique IPs that never return.
+    {
+        let login_limiter = Arc::clone(&state.login_rate_limiter);
+        let api_limiter = Arc::clone(&state.api_rate_limiter);
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+                login_limiter.evict_stale();
+                api_limiter.evict_stale();
+            }
+        });
+    }
+
     // Background task: delete `refresh_tokens` rows that have been expired
     // for more than a week. Keeps the table bounded without losing recent
     // forensic history (admins may want to inspect issued_at / ip on a
@@ -440,6 +454,10 @@ async fn add_api_version_header(mut response: Response) -> Response {
     headers.insert(
         "Referrer-Policy",
         HeaderValue::from_static("strict-origin-when-cross-origin"),
+    );
+    headers.insert(
+        "Strict-Transport-Security",
+        HeaderValue::from_static("max-age=63072000; includeSubDomains"),
     );
     response
 }

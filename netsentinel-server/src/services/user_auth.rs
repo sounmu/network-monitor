@@ -79,13 +79,19 @@ pub fn decode_user_jwt(token: &str) -> Option<UserClaims> {
     if let Ok(data) = decode::<UserClaims>(token, dk, &user_validation) {
         return Some(data.claims);
     }
-    // Fallback: legacy tokens without aud claim
+    // Fallback: legacy tokens without aud claim (deprecated — plan removal)
     let mut legacy_validation = Validation::new(Algorithm::HS256);
     legacy_validation.validate_aud = false;
     decode::<UserClaims>(token, dk, &legacy_validation)
         .ok()
         .filter(|data| data.claims.aud.is_empty()) // Only accept if no aud (legacy)
-        .map(|data| data.claims)
+        .map(|data| {
+            tracing::warn!(
+                username = %data.claims.username,
+                "⚠️ [Auth] Legacy token without aud accepted — upgrade client"
+            );
+            data.claims
+        })
 }
 
 #[cfg(test)]

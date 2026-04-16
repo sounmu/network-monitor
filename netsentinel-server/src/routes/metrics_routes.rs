@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use axum::Router;
+use axum::extract::DefaultBodyLimit;
 use axum::routing::{get, post};
 
 use crate::handlers::{
@@ -137,5 +138,6 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         )
         // SSE real-time stream
         .route("/api/stream", get(sse_handler::sse_handler))
+        .layer(DefaultBodyLimit::max(256 * 1024)) // 256 KB — prevents JSON DoS
         .with_state(state)
 }
