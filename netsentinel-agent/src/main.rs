@@ -43,6 +43,9 @@ async fn main() -> anyhow::Result<()> {
 
     let jwt_secret = std::env::var("JWT_SECRET")
         .context("JWT_SECRET environment variable is not set. Please check your .env file.")?;
+    if jwt_secret.len() < 32 {
+        anyhow::bail!("JWT_SECRET must be at least 32 characters");
+    }
     auth::init_decoding_key(jwt_secret.as_bytes())
         .map_err(|e| anyhow::anyhow!("{e} — this should not happen"))?;
 

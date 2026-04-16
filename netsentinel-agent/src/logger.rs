@@ -68,9 +68,18 @@ fn get_log_dir_path() -> PathBuf {
 // tracing initialisation
 // ──────────────────────────────────────────────
 
+/// Maximum number of daily log files to retain before the oldest are deleted.
+const LOG_RETENTION_DAYS: usize = 180;
+
 pub fn init_tracing() -> WorkerGuard {
     let log_dir = get_log_dir();
-    let file_appender = tracing_appender::rolling::daily(&log_dir, "app.log");
+    let file_appender = tracing_appender::rolling::Builder::new()
+        .rotation(tracing_appender::rolling::Rotation::DAILY)
+        .filename_prefix("app")
+        .filename_suffix("log")
+        .max_log_files(LOG_RETENTION_DAYS)
+        .build(&log_dir)
+        .expect("failed to create rolling file appender");
     let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
 
     let default_level = if cfg!(debug_assertions) {

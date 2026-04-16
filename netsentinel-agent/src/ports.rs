@@ -9,7 +9,8 @@ use std::time::Duration;
 pub(crate) fn parse_comma_separated_ports(input: &str) -> Vec<u16> {
     input
         .split(',')
-        .filter_map(|s| s.trim().parse().ok())
+        .filter_map(|s| s.trim().parse::<u16>().ok())
+        .filter(|&p| p > 0)
         .collect()
 }
 

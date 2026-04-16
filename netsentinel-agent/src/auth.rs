@@ -47,7 +47,7 @@ pub(crate) async fn auth_middleware(req: Request, next: Next) -> Result<Response
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     };
     let mut validation = Validation::new(Algorithm::HS256);
-    // Accept tokens with aud: "agent" (new) and tokens without aud (legacy server compat)
+    // Only accept tokens with aud: "agent". Tokens without aud are rejected.
     validation.set_audience(&["agent"]);
 
     match decode::<Claims>(token, key, &validation) {
