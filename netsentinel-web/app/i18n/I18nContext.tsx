@@ -25,22 +25,20 @@ const I18nContext = createContext<I18nContextValue>({
 });
 
 export function I18nProvider({ children }: { children: React.ReactNode }) {
-  const [locale, setLocaleState] = useState<Locale>(() => {
-    if (typeof window === "undefined") return defaultLocale;
+  const [locale, setLocaleState] = useState<Locale>(defaultLocale);
+
+  // Read stored locale on mount to avoid SSR hydration mismatch
+  useEffect(() => {
     const saved = localStorage.getItem(STORAGE_KEY) as Locale | null;
-    if (saved && locales.includes(saved)) return saved;
-    return defaultLocale;
-  });
+    if (saved && locales.includes(saved)) {
+      setLocaleState(saved);
+    }
+  }, []);
 
   const setLocale = useCallback((next: Locale) => {
     localStorage.setItem(STORAGE_KEY, next);
     setLocaleState(next);
   }, []);
-
-  // Sync <html lang> attribute with current locale
-  useEffect(() => {
-    document.documentElement.lang = locale;
-  }, [locale]);
 
   const value = useMemo(
     () => ({ locale, t: translations[locale], setLocale }),

@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import useSWR from "swr";
+import { toast } from "sonner";
 import { Bell, Save, Trash2, ChevronDown, ChevronUp, Plus, Send } from "lucide-react";
 import {
   AlertConfigRow, UpsertAlertRequest, NotificationChannel, AlertHistoryRow,
@@ -66,10 +67,12 @@ export default function AlertsPage() {
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
 
-  // Initialize global form (render-time state adjustment)
-  if (globalConfigs && !globalForm) {
-    setGlobalForm(configsToForm(globalConfigs));
-  }
+  // Initialize global form when configs load
+  useEffect(() => {
+    if (globalConfigs) {
+      setGlobalForm(configsToForm(globalConfigs));
+    }
+  }, [globalConfigs]);
 
   const handleGlobalSave = useCallback(async () => {
     if (!globalForm) return;
@@ -175,9 +178,12 @@ function HostAlertOverride({ host, globalConfigs }: { host: HostSummary; globalC
   const [msg, setMsg] = useState<string | null>(null);
 
   // Initialize form: use override values if they exist, otherwise use global defaults
-  if (expanded && hostConfigs !== undefined && !form) {
-    setForm(configsToForm(hasOverride ? hostConfigs : globalConfigs));
-  }
+  useEffect(() => {
+    if (expanded && hostConfigs !== undefined) {
+      const hasOvr = hostConfigs.length > 0;
+      setForm(configsToForm(hasOvr ? hostConfigs : globalConfigs));
+    }
+  }, [expanded, hostConfigs, globalConfigs]);
 
   const handleSave = async () => {
     if (!form) return;
@@ -284,16 +290,16 @@ function MetricAlertForm({ label, prefix, form, setForm }: {
         </label>
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-        <MiniField label={t.alerts.threshold}>
-          <input className="date-input" style={{ width: "100%" }} type="number" step="0.1"
+        <MiniField label={t.alerts.threshold} id={`alert-${prefix}-threshold`}>
+          <input id={`alert-${prefix}-threshold`} className="date-input" style={{ width: "100%" }} type="number" step="0.1"
             value={threshold} onChange={(e) => update("threshold", parseFloat(e.target.value) || 0)} />
         </MiniField>
-        <MiniField label={t.alerts.sustained}>
-          <input className="date-input" style={{ width: "100%" }} type="number"
+        <MiniField label={t.alerts.sustained} id={`alert-${prefix}-sustained`}>
+          <input id={`alert-${prefix}-sustained`} className="date-input" style={{ width: "100%" }} type="number"
             value={sustained} onChange={(e) => update("sustained_secs", parseInt(e.target.value) || 0)} />
         </MiniField>
-        <MiniField label={t.alerts.cooldown}>
-          <input className="date-input" style={{ width: "100%" }} type="number"
+        <MiniField label={t.alerts.cooldown} id={`alert-${prefix}-cooldown`}>
+          <input id={`alert-${prefix}-cooldown`} className="date-input" style={{ width: "100%" }} type="number"
             value={cooldown} onChange={(e) => update("cooldown_secs", parseInt(e.target.value) || 0)} />
         </MiniField>
       </div>
@@ -301,10 +307,10 @@ function MetricAlertForm({ label, prefix, form, setForm }: {
   );
 }
 
-function MiniField({ label, children }: { label: string; children: React.ReactNode }) {
+function MiniField({ label, id, children }: { label: string; id?: string; children: React.ReactNode }) {
   return (
     <div>
-      <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 4 }}>{label}</div>
+      <label htmlFor={id} style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 4, display: "block" }}>{label}</label>
       {children}
     </div>
   );
@@ -380,20 +386,28 @@ function NotificationChannelsSection() {
 
   const handleCreate = async () => {
     if (!formName.trim()) return;
-    await createNotificationChannel({
-      name: formName,
-      channel_type: formType,
-      config: formConfig,
-    });
-    setShowForm(false);
-    setFormName("");
-    setFormConfig({});
-    await mutate();
+    try {
+      await createNotificationChannel({
+        name: formName,
+        channel_type: formType,
+        config: formConfig,
+      });
+      setShowForm(false);
+      setFormName("");
+      setFormConfig({});
+      await mutate();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : t.notifications.testFailed);
+    }
   };
 
   const handleDelete = async (id: number) => {
-    await deleteNotificationChannel(id);
-    await mutate();
+    try {
+      await deleteNotificationChannel(id);
+      await mutate();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : t.notifications.testFailed);
+    }
   };
 
   const handleToggle = async (ch: NotificationChannel) => {
@@ -452,12 +466,12 @@ function NotificationChannelsSection() {
       {showForm && (
         <div className="glass-card" style={{ padding: 20, marginBottom: 12 }}>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
-            <MiniField label={t.notifications.channelName}>
-              <input className="date-input" style={{ width: "100%" }} value={formName}
+            <MiniField label={t.notifications.channelName} id="notif-channel-name">
+              <input id="notif-channel-name" className="date-input" style={{ width: "100%" }} value={formName}
                 onChange={(e) => setFormName(e.target.value)} placeholder="My Slack" />
             </MiniField>
-            <MiniField label={t.notifications.channelType}>
-              <select className="date-input" style={{ width: "100%" }} value={formType}
+            <MiniField label={t.notifications.channelType} id="notif-channel-type">
+              <select id="notif-channel-type" className="date-input" style={{ width: "100%" }} value={formType}
                 onChange={(e) => { setFormType(e.target.value as "discord" | "slack" | "email"); setFormConfig({}); }}>
                 <option value="discord">Discord</option>
                 <option value="slack">Slack</option>
@@ -467,8 +481,8 @@ function NotificationChannelsSection() {
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12, marginBottom: 16 }}>
             {configFields.map((field) => (
-              <MiniField key={field} label={configLabels[field] ?? field}>
-                <input className="date-input" style={{ width: "100%" }}
+              <MiniField key={field} label={configLabels[field] ?? field} id={`notif-${field}`}>
+                <input id={`notif-${field}`} className="date-input" style={{ width: "100%" }}
                   type={field === "smtp_pass" ? "password" : "text"}
                   value={formConfig[field] ?? ""}
                   onChange={(e) => setFormConfig((prev) => ({ ...prev, [field]: e.target.value }))}

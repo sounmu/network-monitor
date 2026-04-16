@@ -46,17 +46,8 @@ export default function SetupPage() {
       return;
     }
 
-    if (password.length < 8) {
+    if (password.length < 6) {
       setError(t.auth.passwordTooShort);
-      return;
-    }
-
-    const hasUpper = /[A-Z]/.test(password);
-    const hasLower = /[a-z]/.test(password);
-    const hasDigit = /\d/.test(password);
-    const hasSpecial = /[^A-Za-z0-9]/.test(password);
-    if (!hasUpper || !hasLower || !hasDigit || !hasSpecial) {
-      setError(t.auth.passwordPolicy);
       return;
     }
 
@@ -116,6 +107,7 @@ export default function SetupPage() {
         <form onSubmit={handleSubmit}>
           <div style={{ marginBottom: 16 }}>
             <label
+              htmlFor="setup-username"
               style={{
                 display: "block",
                 color: "var(--text-muted)",
@@ -126,6 +118,7 @@ export default function SetupPage() {
               {t.auth.username}
             </label>
             <input
+              id="setup-username"
               className="date-input"
               type="text"
               value={username}
@@ -137,6 +130,7 @@ export default function SetupPage() {
 
           <div style={{ marginBottom: 16 }}>
             <label
+              htmlFor="setup-password"
               style={{
                 display: "block",
                 color: "var(--text-muted)",
@@ -147,6 +141,7 @@ export default function SetupPage() {
               {t.auth.password}
             </label>
             <input
+              id="setup-password"
               className="date-input"
               type="password"
               value={password}
@@ -157,6 +152,7 @@ export default function SetupPage() {
 
           <div style={{ marginBottom: 24 }}>
             <label
+              htmlFor="setup-confirm"
               style={{
                 display: "block",
                 color: "var(--text-muted)",
@@ -167,6 +163,7 @@ export default function SetupPage() {
               {t.auth.confirmPassword}
             </label>
             <input
+              id="setup-confirm"
               className="date-input"
               type="password"
               value={confirmPassword}

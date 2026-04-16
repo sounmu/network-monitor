@@ -2,6 +2,7 @@
 
 import { useState, useMemo } from "react";
 import useSWR from "swr";
+import { toast } from "sonner";
 import { Globe, Wifi, Plus, Trash2, CheckCircle, XCircle } from "lucide-react";
 import {
   HttpMonitor, HttpMonitorSummary, PingMonitor, PingMonitorSummary,
@@ -11,10 +12,10 @@ import {
 } from "@/app/lib/api";
 import { useI18n } from "@/app/i18n/I18nContext";
 
-function MiniField({ label, children }: { label: string; children: React.ReactNode }) {
+function MiniField({ label, id, children }: { label: string; id?: string; children: React.ReactNode }) {
   return (
     <div>
-      <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 4 }}>{label}</div>
+      <label htmlFor={id} style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 4, display: "block" }}>{label}</label>
       {children}
     </div>
   );
@@ -96,27 +97,35 @@ function HttpMonitorsTab() {
 
   const handleCreate = async () => {
     if (!formName.trim() || !formUrl.trim()) return;
-    await createHttpMonitor({
-      name: formName,
-      url: formUrl,
-      method: formMethod,
-      expected_status: formExpectedStatus,
-      interval_secs: formInterval,
-      timeout_ms: formTimeout,
-    });
-    setShowForm(false);
-    setFormName("");
-    setFormUrl("");
-    setFormMethod("GET");
-    setFormExpectedStatus(200);
-    setFormInterval(60);
-    setFormTimeout(10000);
-    await mutateMonitors();
+    try {
+      await createHttpMonitor({
+        name: formName,
+        url: formUrl,
+        method: formMethod,
+        expected_status: formExpectedStatus,
+        interval_secs: formInterval,
+        timeout_ms: formTimeout,
+      });
+      setShowForm(false);
+      setFormName("");
+      setFormUrl("");
+      setFormMethod("GET");
+      setFormExpectedStatus(200);
+      setFormInterval(60);
+      setFormTimeout(10000);
+      await mutateMonitors();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : t.monitors.addMonitor);
+    }
   };
 
   const handleDelete = async (id: number) => {
-    await deleteHttpMonitor(id);
-    await mutateMonitors();
+    try {
+      await deleteHttpMonitor(id);
+      await mutateMonitors();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : t.monitors.addMonitor);
+    }
   };
 
   return (
@@ -140,34 +149,34 @@ function HttpMonitorsTab() {
       {showForm && (
         <div className="glass-card" style={{ padding: 20, marginBottom: 12 }}>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
-            <MiniField label={t.monitors.name}>
-              <input className="date-input" style={{ width: "100%" }} value={formName}
+            <MiniField label={t.monitors.name} id="http-monitor-name">
+              <input id="http-monitor-name" className="date-input" style={{ width: "100%" }} value={formName}
                 onChange={(e) => setFormName(e.target.value)} placeholder="My API" />
             </MiniField>
-            <MiniField label={t.monitors.url}>
-              <input className="date-input" style={{ width: "100%" }} value={formUrl}
+            <MiniField label={t.monitors.url} id="http-monitor-url">
+              <input id="http-monitor-url" className="date-input" style={{ width: "100%" }} value={formUrl}
                 onChange={(e) => setFormUrl(e.target.value)} placeholder="https://example.com" />
             </MiniField>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 12, marginBottom: 16 }}>
-            <MiniField label={t.monitors.method}>
-              <select className="date-input" style={{ width: "100%" }} value={formMethod}
+            <MiniField label={t.monitors.method} id="http-monitor-method">
+              <select id="http-monitor-method" className="date-input" style={{ width: "100%" }} value={formMethod}
                 onChange={(e) => setFormMethod(e.target.value)}>
                 <option value="GET">GET</option>
                 <option value="POST">POST</option>
                 <option value="HEAD">HEAD</option>
               </select>
             </MiniField>
-            <MiniField label={t.monitors.expectedStatus}>
-              <input className="date-input" style={{ width: "100%" }} type="number"
+            <MiniField label={t.monitors.expectedStatus} id="http-monitor-expected-status">
+              <input id="http-monitor-expected-status" className="date-input" style={{ width: "100%" }} type="number"
                 value={formExpectedStatus} onChange={(e) => setFormExpectedStatus(parseInt(e.target.value) || 200)} />
             </MiniField>
-            <MiniField label={t.monitors.interval}>
-              <input className="date-input" style={{ width: "100%" }} type="number"
+            <MiniField label={t.monitors.interval} id="http-monitor-interval">
+              <input id="http-monitor-interval" className="date-input" style={{ width: "100%" }} type="number"
                 value={formInterval} onChange={(e) => setFormInterval(parseInt(e.target.value) || 60)} />
             </MiniField>
-            <MiniField label={t.monitors.timeout}>
-              <input className="date-input" style={{ width: "100%" }} type="number"
+            <MiniField label={t.monitors.timeout} id="http-monitor-timeout">
+              <input id="http-monitor-timeout" className="date-input" style={{ width: "100%" }} type="number"
                 value={formTimeout} onChange={(e) => setFormTimeout(parseInt(e.target.value) || 10000)} />
             </MiniField>
           </div>
@@ -261,16 +270,24 @@ function PingMonitorsTab() {
 
   const handleCreate = async () => {
     if (!formName.trim() || !formHost.trim()) return;
-    await createPingMonitor({ name: formName, host: formHost });
-    setShowForm(false);
-    setFormName("");
-    setFormHost("");
-    await mutateMonitors();
+    try {
+      await createPingMonitor({ name: formName, host: formHost });
+      setShowForm(false);
+      setFormName("");
+      setFormHost("");
+      await mutateMonitors();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : t.monitors.addMonitor);
+    }
   };
 
   const handleDelete = async (id: number) => {
-    await deletePingMonitor(id);
-    await mutateMonitors();
+    try {
+      await deletePingMonitor(id);
+      await mutateMonitors();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : t.monitors.addMonitor);
+    }
   };
 
   return (
@@ -294,12 +311,12 @@ function PingMonitorsTab() {
       {showForm && (
         <div className="glass-card" style={{ padding: 20, marginBottom: 12 }}>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
-            <MiniField label={t.monitors.name}>
-              <input className="date-input" style={{ width: "100%" }} value={formName}
+            <MiniField label={t.monitors.name} id="ping-monitor-name">
+              <input id="ping-monitor-name" className="date-input" style={{ width: "100%" }} value={formName}
                 onChange={(e) => setFormName(e.target.value)} placeholder="Gateway" />
             </MiniField>
-            <MiniField label={t.monitors.host}>
-              <input className="date-input" style={{ width: "100%" }} value={formHost}
+            <MiniField label={t.monitors.host} id="ping-monitor-host">
+              <input id="ping-monitor-host" className="date-input" style={{ width: "100%" }} value={formHost}
                 onChange={(e) => setFormHost(e.target.value)} placeholder="192.168.1.1 or 192.168.1.1:80" />
             </MiniField>
           </div>

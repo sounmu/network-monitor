@@ -65,6 +65,18 @@ export default function DateTimePicker({ value, onChange }: DateTimePickerProps)
     return () => document.removeEventListener("mousedown", handler);
   }, [open]);
 
+  // Close on Escape key
+  useEffect(() => {
+    if (!open) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [open]);
+
   const prevMonth = () => {
     if (viewMonth === 0) {
       setViewMonth(11);

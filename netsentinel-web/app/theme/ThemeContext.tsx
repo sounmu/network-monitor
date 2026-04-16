@@ -15,18 +15,25 @@ const ThemeContext = createContext<ThemeContextValue>({
 });
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [theme, setTheme] = useState<Theme>(() => {
-    if (typeof window === "undefined") return "light";
-    const stored = localStorage.getItem("theme") as Theme | null;
-    if (stored === "light" || stored === "dark") return stored;
-    if (window.matchMedia("(prefers-color-scheme: dark)").matches) return "dark";
-    return "light";
-  });
+  const [theme, setTheme] = useState<Theme>("light");
+  const [mounted, setMounted] = useState(false);
 
-  // Sync data-theme attribute on initial render
+  // Read stored theme on mount to avoid SSR hydration mismatch
   useEffect(() => {
+    const stored = localStorage.getItem("theme");
+    if (stored === "dark" || stored === "light") {
+      setTheme(stored);
+    } else if (window.matchMedia("(prefers-color-scheme: dark)").matches) {
+      setTheme("dark");
+    }
+    setMounted(true);
+  }, []);
+
+  // Sync data-theme attribute
+  useEffect(() => {
+    if (!mounted) return;
     document.documentElement.setAttribute("data-theme", theme);
-  }, [theme]);
+  }, [theme, mounted]);
 
   const toggleTheme = useCallback(() => {
     setTheme((prev) => {

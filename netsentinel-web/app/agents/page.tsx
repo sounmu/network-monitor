@@ -164,9 +164,9 @@ export default function AgentsPage() {
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 16 }}>
-            <FormField label={t.agents.hostKey} required>
+            <FormField label={t.agents.hostKey} required id="agent-host-key">
               {editingKey === "new" ? (
-                <input className="date-input" style={{ width: "100%", fontFamily: "var(--font-mono), monospace" }}
+                <input id="agent-host-key" className="date-input" style={{ width: "100%", fontFamily: "var(--font-mono), monospace" }}
                   placeholder="192.168.1.10:9101" value={form.host_key}
                   onChange={(e) => updateField("host_key", e.target.value)} />
               ) : (
@@ -175,28 +175,28 @@ export default function AgentsPage() {
                 </div>
               )}
             </FormField>
-            <FormField label={t.agents.displayName} required>
-              <input className="date-input" style={{ width: "100%" }}
+            <FormField label={t.agents.displayName} required id="agent-display-name">
+              <input id="agent-display-name" className="date-input" style={{ width: "100%" }}
                 placeholder="Production Server" value={form.display_name}
                 onChange={(e) => updateField("display_name", e.target.value)} />
             </FormField>
-            <FormField label={t.agents.scrapeInterval}>
-              <input className="date-input" style={{ width: "100%" }} type="number" min={1}
+            <FormField label={t.agents.scrapeInterval} id="agent-scrape-interval">
+              <input id="agent-scrape-interval" className="date-input" style={{ width: "100%" }} type="number" min={1}
                 value={form.scrape_interval_secs}
                 onChange={(e) => updateField("scrape_interval_secs", parseInt(e.target.value) || 10)} />
             </FormField>
-            <FormField label={t.agents.loadThreshold}>
-              <input className="date-input" style={{ width: "100%" }} type="number" step="0.1"
+            <FormField label={t.agents.loadThreshold} id="agent-load-threshold">
+              <input id="agent-load-threshold" className="date-input" style={{ width: "100%" }} type="number" step="0.1"
                 value={form.load_threshold}
                 onChange={(e) => updateField("load_threshold", parseFloat(e.target.value) || 4.0)} />
             </FormField>
-            <FormField label={t.agents.monitoredPorts}>
-              <input className="date-input" style={{ width: "100%", fontFamily: "var(--font-mono), monospace" }}
+            <FormField label={t.agents.monitoredPorts} id="agent-ports">
+              <input id="agent-ports" className="date-input" style={{ width: "100%", fontFamily: "var(--font-mono), monospace" }}
                 placeholder="80, 443, 5432" value={form.ports}
                 onChange={(e) => updateField("ports", e.target.value)} />
             </FormField>
-            <FormField label={t.agents.dockerContainers}>
-              <input className="date-input" style={{ width: "100%" }}
+            <FormField label={t.agents.dockerContainers} id="agent-containers">
+              <input id="agent-containers" className="date-input" style={{ width: "100%" }}
                 placeholder="empty = monitor all" value={form.containers}
                 onChange={(e) => updateField("containers", e.target.value)} />
             </FormField>
@@ -285,10 +285,10 @@ export default function AgentsPage() {
   );
 }
 
-function FormField({ label, required, children }: { label: string; required?: boolean; children: React.ReactNode }) {
+function FormField({ label, required, id, children }: { label: string; required?: boolean; id?: string; children: React.ReactNode }) {
   return (
     <div>
-      <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 6 }}>
+      <label htmlFor={id} style={{ display: "block", fontSize: 12, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 6 }}>
         {label}{required && <span style={{ color: "var(--accent-red)", marginLeft: 2 }}>*</span>}
       </label>
       {children}
