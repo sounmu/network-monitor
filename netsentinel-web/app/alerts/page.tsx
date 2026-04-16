@@ -490,12 +490,12 @@ function NotificationChannelsSection() {
       {/* Channel list */}
       {channels?.map((ch) => (
         <div key={ch.id} className="glass-card" style={{ padding: "14px 20px", marginBottom: 8, display: "flex", alignItems: "center", gap: 12 }}>
-          <div
+          <button
+            role="switch"
+            aria-checked={ch.enabled}
             onClick={() => handleToggle(ch)}
-            style={{ width: 32, height: 18, borderRadius: 9, background: ch.enabled ? "var(--accent-green)" : "var(--bg-card-hover)", cursor: "pointer", position: "relative", transition: "background 0.2s" }}
-          >
-            <div style={{ width: 14, height: 14, borderRadius: "50%", background: "white", position: "absolute", top: 2, left: ch.enabled ? 16 : 2, transition: "left 0.2s", boxShadow: "0 1px 3px rgba(0,0,0,0.2)" }} />
-          </div>
+            className="switch"
+          />
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-primary)" }}>{ch.name}</div>
             <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{ch.channel_type}</div>
