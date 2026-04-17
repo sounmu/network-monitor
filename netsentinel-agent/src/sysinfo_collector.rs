@@ -50,6 +50,15 @@ static NETS: LazyLock<Mutex<Networks>> =
 static COMPS: LazyLock<Mutex<Components>> =
     LazyLock::new(|| Mutex::new(Components::new_with_refreshed_list()));
 
+/// Serializes `collect_sysinfo` calls at the async layer so concurrent scrapes
+/// cooperate instead of piling up on `SYS`'s `std::sync::Mutex` inside blocking
+/// threads. Without this, a server retry or health-check arriving during the
+/// ~200 ms CPU-delta window would wake a second blocking task that stalls on
+/// the std mutex for the full sample duration — wasting a blocking-pool slot
+/// and giving the caller a stale-but-slow response.
+static COLLECT_GATE: LazyLock<tokio::sync::Mutex<()>> =
+    LazyLock::new(|| tokio::sync::Mutex::new(()));
+
 /// Compute per-disk read/write bytes per second using sysinfo's cumulative counters.
 /// Cross-platform: works on Linux, macOS, and Windows via `Disk::usage()`.
 fn compute_disk_io(dev_name: &str, usage: &DiskUsage) -> (f64, f64) {
@@ -116,6 +125,11 @@ fn extract_block_device(disk_name: &str) -> String {
 
 #[tracing::instrument]
 pub(crate) async fn collect_sysinfo() -> SysinfoResult {
+    // Hold the async gate for the duration of this collection — prevents a
+    // second concurrent caller from spawning a blocking task that would then
+    // block on SYS for the full ~200 ms sample window.
+    let _gate = COLLECT_GATE.lock().await;
+
     // GPU collection runs on its own blocking thread — its ~200ms sampling window
     // overlaps with the CPU/process delta sleeps, hiding the latency entirely.
     let gpu_handle = tokio::task::spawn_blocking(gpu::collect_gpu_info);
