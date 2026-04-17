@@ -10,8 +10,14 @@ pub enum AppError {
     NotFound(String),
     /// Invalid request format or parameters (400)
     BadRequest(String),
-    /// Authentication required or credentials invalid (401)
+    /// Authentication required or credentials invalid (401).
+    /// Use this **only** for session/token problems so the web client can
+    /// trigger its silent refresh → re-login flow. For role/permission
+    /// failures use `Forbidden` instead — returning 401 would cause the
+    /// frontend's 401-handler to log out a perfectly-authenticated user.
     Unauthorized(String),
+    /// Authenticated but lacks permission for the resource (403).
+    Forbidden(String),
     /// Too many requests / rate limited (429)
     TooManyRequests(String),
     /// Request conflicts with current server state, e.g. duplicate key (409)
@@ -25,6 +31,7 @@ impl std::fmt::Display for AppError {
             AppError::NotFound(msg) => write!(f, "Not Found: {}", msg),
             AppError::BadRequest(msg) => write!(f, "Bad Request: {}", msg),
             AppError::Unauthorized(msg) => write!(f, "Unauthorized: {}", msg),
+            AppError::Forbidden(msg) => write!(f, "Forbidden: {}", msg),
             AppError::TooManyRequests(msg) => write!(f, "Too Many Requests: {}", msg),
             AppError::Conflict(msg) => write!(f, "Conflict: {}", msg),
         }
@@ -68,6 +75,10 @@ impl IntoResponse for AppError {
             AppError::Unauthorized(msg) => {
                 tracing::warn!(error = %msg, status = 401, "Unauthorized");
                 (StatusCode::UNAUTHORIZED, msg).into_response()
+            }
+            AppError::Forbidden(msg) => {
+                tracing::warn!(error = %msg, status = 403, "Forbidden");
+                (StatusCode::FORBIDDEN, msg).into_response()
             }
             AppError::TooManyRequests(msg) => {
                 tracing::warn!(error = %msg, status = 429, "Too Many Requests");

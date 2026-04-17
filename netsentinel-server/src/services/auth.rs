@@ -170,7 +170,11 @@ where
         }
 
         if claims.role != "admin" {
-            return Err(AppError::Unauthorized("Admin access required".to_string()));
+            // 403, not 401 — the token is valid, the role is insufficient.
+            // Returning 401 here would cause the web client's 401-handler to
+            // wipe the session and force re-login of a correctly-authenticated
+            // viewer who merely lacks the admin role.
+            return Err(AppError::Forbidden("Admin access required".to_string()));
         }
 
         Ok(AdminGuard { claims })

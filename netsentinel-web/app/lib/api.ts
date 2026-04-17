@@ -126,6 +126,7 @@ export const fetcher = async <T>(url: string): Promise<T> => {
 
   let res = await doFetch();
   // One silent refresh attempt on 401 before giving up.
+  // 403 is a permission error, NOT a session problem — don't refresh/logout.
   if (res.status === 401) {
     const refreshed = await silentRefresh();
     if (refreshed) {
@@ -134,7 +135,8 @@ export const fetcher = async <T>(url: string): Promise<T> => {
     if (res.status === 401) handleUnauthorized();
   }
   if (!res.ok) {
-    throw new Error(`API Error: ${res.status} ${res.statusText}`);
+    const text = await res.text().catch(() => "");
+    throw new ApiError(res.status, text || `API Error: ${res.status} ${res.statusText}`);
   }
   return res.json();
 };
@@ -153,6 +155,9 @@ async function apiCall<T>(url: string, method: string, body?: unknown): Promise<
   };
 
   let res = await doFetch();
+  // Mirror `fetcher`: 401 triggers a silent refresh; 403 bubbles as a typed
+  // permission error so callers can distinguish "your session is dead" from
+  // "you don't have permission for this action" without logging the user out.
   if (res.status === 401) {
     const refreshed = await silentRefresh();
     if (refreshed) {
@@ -161,8 +166,8 @@ async function apiCall<T>(url: string, method: string, body?: unknown): Promise<
     if (res.status === 401) handleUnauthorized();
   }
   if (!res.ok) {
-    const text = await res.text();
-    throw new Error(text || `${res.status} ${res.statusText}`);
+    const text = await res.text().catch(() => "");
+    throw new ApiError(res.status, text || `${res.status} ${res.statusText}`);
   }
   return res.json();
 }
