@@ -58,7 +58,12 @@ export default function RootLayout({
             <ErrorBoundary>
             <div className="app-layout">
               <Navbar />
-              <main id="main-content">
+              {/* `tabIndex={-1}` makes the element programmatically
+                  focusable so the "Skip to content" link actually moves
+                  focus when followed. Without it, Safari and older
+                  Firefox do not move keyboard focus to a div/main that
+                  has no native tabindex (WCAG 2.1 G1). */}
+              <main id="main-content" tabIndex={-1}>
                 {children}
               </main>
             </div>

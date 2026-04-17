@@ -145,7 +145,7 @@ export default function AgentsPage() {
             </h1>
           </div>
           {editingKey === null && (
-            <button onClick={openAdd} style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 16px", borderRadius: 8, border: "1px solid var(--accent-blue)", background: "var(--accent-blue)", color: "white", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+            <button onClick={openAdd} style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 16px", borderRadius: 8, border: "1px solid var(--accent-blue)", background: "var(--accent-blue)", color: "var(--text-on-accent, #fff)", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
               <Plus size={14} /> {t.agents.addAgent}
             </button>
           )}
@@ -216,7 +216,7 @@ export default function AgentsPage() {
             <button onClick={closeForm} style={{ padding: "8px 20px", borderRadius: 8, border: "1px solid var(--border-subtle)", background: "var(--bg-secondary)", color: "var(--text-secondary)", fontSize: 13, fontWeight: 500, cursor: "pointer" }}>
               {t.agents.cancel}
             </button>
-            <button onClick={handleSave} disabled={saving} style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 20px", borderRadius: 8, border: "1px solid var(--accent-blue)", background: saving ? "var(--preset-hover-border)" : "var(--accent-blue)", color: "white", fontSize: 13, fontWeight: 600, cursor: saving ? "not-allowed" : "pointer" }}>
+            <button onClick={handleSave} disabled={saving} style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 20px", borderRadius: 8, border: "1px solid var(--accent-blue)", background: saving ? "var(--preset-hover-border)" : "var(--accent-blue)", color: "var(--text-on-accent, #fff)", fontSize: 13, fontWeight: 600, cursor: saving ? "not-allowed" : "pointer" }}>
               <Save size={14} /> {saving ? t.agents.saving : t.agents.save}
             </button>
           </div>
@@ -274,7 +274,7 @@ export default function AgentsPage() {
                 <IconButton icon={<Pencil size={14} />} onClick={() => openEdit(host.host_key)} title="Edit" />
                 {deleteConfirm === host.host_key ? (
                   <div style={{ display: "flex", gap: 4 }}>
-                    <button onClick={() => handleDelete(host.host_key)} style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid var(--accent-red)", background: "var(--accent-red)", color: "white", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>{t.agents.deleteConfirmText}</button>
+                    <button onClick={() => handleDelete(host.host_key)} style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid var(--accent-red)", background: "var(--accent-red)", color: "var(--text-on-accent, #fff)", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>{t.agents.deleteConfirmText}</button>
                     <button onClick={() => setDeleteConfirm(null)} style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid var(--border-subtle)", background: "var(--bg-secondary)", color: "var(--text-secondary)", fontSize: 11, cursor: "pointer" }}>{t.agents.cancel}</button>
                   </div>
                 ) : (
@@ -301,8 +301,10 @@ function FormField({ label, required, id, children }: { label: string; required?
 }
 
 function IconButton({ icon, onClick, title, danger }: { icon: React.ReactNode; onClick: () => void; title: string; danger?: boolean }) {
+  // `title` alone isn't a reliable accessible name (JAWS/NVDA behavior varies);
+  // forward it as `aria-label` too per WAI-ARIA APG icon-button pattern.
   return (
-    <button onClick={onClick} title={title} style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 32, height: 32, borderRadius: 8, border: "1px solid", borderColor: danger ? "var(--badge-offline-border)" : "var(--border-subtle)", background: danger ? "var(--status-offline-bg)" : "var(--bg-secondary)", color: danger ? "var(--accent-red)" : "var(--text-muted)", cursor: "pointer", transition: "all 0.15s ease" }}>
+    <button onClick={onClick} title={title} aria-label={title} style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 32, height: 32, borderRadius: 8, border: "1px solid", borderColor: danger ? "var(--badge-offline-border)" : "var(--border-subtle)", background: danger ? "var(--status-offline-bg)" : "var(--bg-secondary)", color: danger ? "var(--accent-red)" : "var(--text-muted)", cursor: "pointer", transition: "all 0.15s ease" }}>
       {icon}
     </button>
   );

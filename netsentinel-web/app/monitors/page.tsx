@@ -47,7 +47,7 @@ export default function MonitorsPage() {
             display: "flex", alignItems: "center", gap: 6, padding: "8px 16px",
             borderRadius: 8, border: `1px solid ${activeTab === "http" ? "var(--accent-blue)" : "var(--border-subtle)"}`,
             background: activeTab === "http" ? "var(--accent-blue)" : "var(--bg-secondary)",
-            color: activeTab === "http" ? "white" : "var(--text-secondary)",
+            color: activeTab === "http" ? "var(--text-on-accent, #fff)" : "var(--text-secondary)",
             fontSize: 13, fontWeight: 600, cursor: "pointer",
           }}
         >
@@ -59,7 +59,7 @@ export default function MonitorsPage() {
             display: "flex", alignItems: "center", gap: 6, padding: "8px 16px",
             borderRadius: 8, border: `1px solid ${activeTab === "ping" ? "var(--accent-blue)" : "var(--border-subtle)"}`,
             background: activeTab === "ping" ? "var(--accent-blue)" : "var(--bg-secondary)",
-            color: activeTab === "ping" ? "white" : "var(--text-secondary)",
+            color: activeTab === "ping" ? "var(--text-on-accent, #fff)" : "var(--text-secondary)",
             fontSize: 13, fontWeight: 600, cursor: "pointer",
           }}
         >
@@ -137,7 +137,7 @@ function HttpMonitorsTab() {
           style={{
             display: "flex", alignItems: "center", gap: 6, padding: "6px 14px",
             borderRadius: 8, border: "1px solid var(--accent-blue)",
-            background: "var(--accent-blue)", color: "white", fontSize: 12,
+            background: "var(--accent-blue)", color: "var(--text-on-accent, #fff)", fontSize: 12,
             fontWeight: 600, cursor: "pointer",
           }}
         >
@@ -184,7 +184,7 @@ function HttpMonitorsTab() {
             <button onClick={() => setShowForm(false)} style={{ padding: "6px 14px", borderRadius: 6, border: "1px solid var(--border-subtle)", background: "var(--bg-secondary)", color: "var(--text-secondary)", fontSize: 12, cursor: "pointer" }}>
               {t.common.cancel}
             </button>
-            <button onClick={handleCreate} style={{ padding: "6px 14px", borderRadius: 6, border: "1px solid var(--accent-blue)", background: "var(--accent-blue)", color: "white", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+            <button onClick={handleCreate} style={{ padding: "6px 14px", borderRadius: 6, border: "1px solid var(--accent-blue)", background: "var(--accent-blue)", color: "var(--text-on-accent, #fff)", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
               {t.monitors.addMonitor}
             </button>
           </div>
@@ -229,12 +229,17 @@ function HttpMonitorsTab() {
             )}
 
             {/* Delete */}
-            <button onClick={() => handleDelete(monitor.id)} style={{
-              padding: "4px 8px", borderRadius: 6,
-              border: "1px solid var(--badge-offline-border)",
-              background: "var(--status-offline-bg)", color: "var(--accent-red)",
-              fontSize: 11, cursor: "pointer",
-            }}>
+            <button
+              onClick={() => handleDelete(monitor.id)}
+              aria-label={t.common.delete}
+              title={t.common.delete}
+              style={{
+                padding: "4px 8px", borderRadius: 6,
+                border: "1px solid var(--badge-offline-border)",
+                background: "var(--status-offline-bg)", color: "var(--accent-red)",
+                fontSize: 11, cursor: "pointer",
+              }}
+            >
               <Trash2 size={12} />
             </button>
           </div>
@@ -299,7 +304,7 @@ function PingMonitorsTab() {
           style={{
             display: "flex", alignItems: "center", gap: 6, padding: "6px 14px",
             borderRadius: 8, border: "1px solid var(--accent-blue)",
-            background: "var(--accent-blue)", color: "white", fontSize: 12,
+            background: "var(--accent-blue)", color: "var(--text-on-accent, #fff)", fontSize: 12,
             fontWeight: 600, cursor: "pointer",
           }}
         >
@@ -324,7 +329,7 @@ function PingMonitorsTab() {
             <button onClick={() => setShowForm(false)} style={{ padding: "6px 14px", borderRadius: 6, border: "1px solid var(--border-subtle)", background: "var(--bg-secondary)", color: "var(--text-secondary)", fontSize: 12, cursor: "pointer" }}>
               {t.common.cancel}
             </button>
-            <button onClick={handleCreate} style={{ padding: "6px 14px", borderRadius: 6, border: "1px solid var(--accent-blue)", background: "var(--accent-blue)", color: "white", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+            <button onClick={handleCreate} style={{ padding: "6px 14px", borderRadius: 6, border: "1px solid var(--accent-blue)", background: "var(--accent-blue)", color: "var(--text-on-accent, #fff)", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
               {t.monitors.addMonitor}
             </button>
           </div>
@@ -369,12 +374,17 @@ function PingMonitorsTab() {
             )}
 
             {/* Delete */}
-            <button onClick={() => handleDelete(monitor.id)} style={{
-              padding: "4px 8px", borderRadius: 6,
-              border: "1px solid var(--badge-offline-border)",
-              background: "var(--status-offline-bg)", color: "var(--accent-red)",
-              fontSize: 11, cursor: "pointer",
-            }}>
+            <button
+              onClick={() => handleDelete(monitor.id)}
+              aria-label={t.common.delete}
+              title={t.common.delete}
+              style={{
+                padding: "4px 8px", borderRadius: 6,
+                border: "1px solid var(--badge-offline-border)",
+                background: "var(--status-offline-bg)", color: "var(--accent-red)",
+                fontSize: 11, cursor: "pointer",
+              }}
+            >
               <Trash2 size={12} />
             </button>
           </div>
