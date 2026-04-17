@@ -46,8 +46,17 @@ export default function SetupPage() {
       return;
     }
 
-    if (password.length < 6) {
+    if (password.length < 8 || password.length > 128) {
       setError(t.auth.passwordTooShort);
+      return;
+    }
+
+    const hasUpper = /[A-Z]/.test(password);
+    const hasLower = /[a-z]/.test(password);
+    const hasDigit = /\d/.test(password);
+    const hasSpecial = /[^A-Za-z0-9]/.test(password);
+    if (!(hasUpper && hasLower && hasDigit && hasSpecial)) {
+      setError(t.auth.passwordPolicy);
       return;
     }
 
