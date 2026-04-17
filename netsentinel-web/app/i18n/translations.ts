@@ -312,6 +312,7 @@ export const translations = {
     errorBoundary: {
       title: "Something went wrong",
       reload: "Reload",
+      fallbackMessage: "An unexpected error occurred.",
     },
     // Common
     common: {
@@ -614,6 +615,7 @@ export const translations = {
     errorBoundary: {
       title: "오류가 발생했습니다",
       reload: "새로고침",
+      fallbackMessage: "예상치 못한 오류가 발생했습니다.",
     },
     common: {
       delete: "삭제",
