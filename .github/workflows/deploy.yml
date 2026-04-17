@@ -97,14 +97,59 @@ jobs:
       - name: Build & restart on server
         run: |
           ssh -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} << 'EOF'
+            set -euo pipefail
+
+            # 1) Shut down any legacy network-monitor stack before it can
+            #    collide on ports 3000 / 3001 with the new netsentinel stack.
+            #    Idempotent: a no-op once the directory is gone.
+            if [ -d ~/network-monitor ] && [ -f ~/network-monitor/docker-compose.yml ]; then
+              echo "⚠️  Legacy ~/network-monitor detected — shutting it down"
+              (cd ~/network-monitor && docker compose down --remove-orphans) || true
+            fi
+
+            # 2) One-time pgdata migration: if the legacy bind-mount still holds
+            #    TimescaleDB data and the new directory is empty, move it over
+            #    atomically. PostgreSQL must already be stopped by step (1) —
+            #    moving a live data dir would corrupt WAL. The `! -d` guard
+            #    makes the whole step idempotent across re-runs.
+            mkdir -p ~/netsentinel
+            if [ -d ~/network-monitor/pgdata ] && [ ! -d ~/netsentinel/pgdata ]; then
+              echo "📦 Migrating pgdata from legacy path → ~/netsentinel/pgdata"
+              mv -v ~/network-monitor/pgdata ~/netsentinel/pgdata
+            fi
+
+            # 3) Bring up the new stack. --remove-orphans cleans up any stale
+            #    services that existed under the previous compose file.
             cd ~/netsentinel
-            docker compose up -d --build server web
+            docker compose up -d --build --remove-orphans server web
+
+            # 4) Prune dangling layers AND tagged legacy images. Without the
+            #    explicit rmi, `network-monitor-server:latest` lingers and
+            #    eats disk on the Oracle free-tier boot volume.
             docker image prune -f
+            docker images --format '{{.Repository}}:{{.Tag}}' \
+              | grep -E '^(ghcr\.io/sounmu/)?network-monitor-(server|web):' \
+              | xargs -r docker rmi -f || true
           EOF
 
       - name: Verify deployment
         run: |
           ssh -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} << 'EOF'
+            set -euo pipefail
+
+            # Guard against the legacy container answering on :3000 while the
+            # new netsentinel-server failed to start — previously that produced
+            # a false-positive green health check.
+            # No `head -1` here — under `set -o pipefail` an EPIPE on docker
+            # would be treated as a failure. docker ps is already filtered.
+            RUNNING=$(docker ps --filter "name=netsentinel-server" --format '{{.Names}}')
+            if [ -z "$RUNNING" ]; then
+              echo "❌ netsentinel-server container is not running"
+              docker compose -f ~/netsentinel/docker-compose.yml logs --tail=50 server
+              exit 1
+            fi
+            echo "✅ Container up: $RUNNING"
+
             for i in $(seq 1 30); do
               if curl -sf http://localhost:3000/api/health > /dev/null 2>&1; then
                 echo "✅ Health check passed (attempt $i)"
