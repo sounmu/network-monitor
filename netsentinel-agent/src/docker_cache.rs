@@ -73,12 +73,16 @@ pub(crate) async fn initial_docker_load(docker: &Docker) -> Vec<DockerContainer>
 /// lifecycle changes. Instead of polling the full container list every 15 seconds, I/O only
 /// happens when an event fires — significantly reducing Docker daemon load and network I/O.
 pub(crate) async fn docker_event_listener(cache: DockerCache) {
+    let mut backoff = Duration::from_secs(5);
+    const MAX_BACKOFF: Duration = Duration::from_secs(300);
+
     loop {
         let docker = match Docker::connect_with_local_defaults() {
             Ok(d) => d,
             Err(e) => {
-                tracing::error!(err = ?e, "⚠️  [Docker Events] Connection failed, retrying in 5s");
-                tokio::time::sleep(Duration::from_secs(5)).await;
+                tracing::error!(err = ?e, "⚠️  [Docker Events] Connection failed, retrying in {}s", backoff.as_secs());
+                tokio::time::sleep(backoff).await;
+                backoff = (backoff * 2).min(MAX_BACKOFF);
                 continue;
             }
         };
@@ -102,6 +106,7 @@ pub(crate) async fn docker_event_listener(cache: DockerCache) {
 
         let mut stream = docker.events(Some(options));
         tracing::info!("🐳 [Docker Events] Listening for container lifecycle events");
+        backoff = Duration::from_secs(5); // reset on successful connection + stream start
 
         while let Some(event_result) = stream.next().await {
             match event_result {
@@ -113,8 +118,12 @@ pub(crate) async fn docker_event_listener(cache: DockerCache) {
             }
         }
 
-        tracing::warn!("⚠️  [Docker Events] Stream ended, reconnecting in 5s");
-        tokio::time::sleep(Duration::from_secs(5)).await;
+        tracing::warn!(
+            "⚠️  [Docker Events] Stream ended, reconnecting in {}s",
+            backoff.as_secs()
+        );
+        tokio::time::sleep(backoff).await;
+        backoff = (backoff * 2).min(MAX_BACKOFF);
     }
 }
 
@@ -295,13 +304,20 @@ pub(crate) async fn docker_stats_poller(
     let mut interval = tokio::time::interval(Duration::from_secs(10));
     let _ = interval.tick().await; // skip first immediate tick
 
+    let mut backoff = Duration::from_secs(10);
+    const MAX_BACKOFF: Duration = Duration::from_secs(300);
+
     loop {
         // Connect once, reuse across multiple poll cycles
         let docker = match Docker::connect_with_local_defaults() {
-            Ok(d) => d,
+            Ok(d) => {
+                backoff = Duration::from_secs(10); // reset on success
+                d
+            }
             Err(e) => {
-                tracing::warn!(err = ?e, "Docker stats connection failed, retrying in 10s");
-                interval.tick().await;
+                tracing::warn!(err = ?e, "Docker stats connection failed, retrying in {}s", backoff.as_secs());
+                tokio::time::sleep(backoff).await;
+                backoff = (backoff * 2).min(MAX_BACKOFF);
                 continue;
             }
         };

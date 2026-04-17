@@ -43,6 +43,13 @@ fn is_physical_interface(name: &str) -> bool {
 type DiskIoPrev = HashMap<String, (u64, u64, Instant)>;
 static DISK_IO_PREV: LazyLock<Mutex<DiskIoPrev>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
+/// Cached sysinfo instances — reused across collection cycles instead of creating fresh each time.
+static SYS: LazyLock<Mutex<System>> = LazyLock::new(|| Mutex::new(System::new()));
+static NETS: LazyLock<Mutex<Networks>> =
+    LazyLock::new(|| Mutex::new(Networks::new_with_refreshed_list()));
+static COMPS: LazyLock<Mutex<Components>> =
+    LazyLock::new(|| Mutex::new(Components::new_with_refreshed_list()));
+
 /// Compute per-disk read/write bytes per second using sysinfo's cumulative counters.
 /// Cross-platform: works on Linux, macOS, and Windows via `Disk::usage()`.
 fn compute_disk_io(dev_name: &str, usage: &DiskUsage) -> (f64, f64) {
@@ -115,7 +122,7 @@ pub(crate) async fn collect_sysinfo() -> SysinfoResult {
 
     // sysinfo collection runs on a separate blocking thread.
     let sys_handle = tokio::task::spawn_blocking(|| {
-        let mut sys = System::new();
+        let mut sys = SYS.lock().unwrap_or_else(|e| e.into_inner());
 
         // Three-phase CPU delta measurement.
         // macOS (and some Linux kernels) require three refresh_processes calls
@@ -176,7 +183,8 @@ pub(crate) async fn collect_sysinfo() -> SysinfoResult {
         prune_disk_io_cache(&disks_raw);
 
         // Aggregate physical interface traffic + per-interface breakdown.
-        let nets = Networks::new_with_refreshed_list();
+        let mut nets = NETS.lock().unwrap_or_else(|e| e.into_inner());
+        nets.refresh(true); // refresh in place instead of creating new
         let mut network = NetworkTotal::default();
         let mut network_interfaces = Vec::new();
         for (name, data) in nets.iter().filter(|(name, _)| is_physical_interface(name)) {
@@ -231,7 +239,8 @@ pub(crate) async fn collect_sysinfo() -> SysinfoResult {
         }
 
         // Temperature sensors
-        let components = Components::new_with_refreshed_list();
+        let mut components = COMPS.lock().unwrap_or_else(|e| e.into_inner());
+        components.refresh(true); // refresh in place
         let temperatures: Vec<TemperatureInfo> = components
             .iter()
             .filter_map(|c| {
