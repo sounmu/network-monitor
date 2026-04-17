@@ -132,17 +132,51 @@ pub async fn test_channel(
     Ok(Json(serde_json::json!({ "success": true })))
 }
 
-/// SSRF protection: validate webhook URLs resolve to public IPs only.
+/// Ports that must never be an SMTP target. SMTP standard ports (25, 465,
+/// 587, 2525) are permitted; any admin pointing at a database/cache/SSH
+/// port is almost certainly probing internal services rather than sending
+/// mail. Paired with `url_validator::validate_host` (private-IP block) at
+/// both handler + runtime entry points for defense in depth.
+const DISALLOWED_SMTP_PORTS: &[u16] = &[22, 80, 443, 3306, 5432, 6379, 11211, 27017];
+
+/// SSRF protection: validate webhook URLs and SMTP endpoints resolve to
+/// public IPs only. Applied at handler time (blocks bad configs from being
+/// saved) and mirrored in `alert_service::send_email` at send time
+/// (defense in depth — config may have been saved before a new blocklist
+/// entry was added).
 async fn validate_webhook_ssrf(
     channel_type: ChannelType,
     config: &serde_json::Value,
 ) -> Result<(), AppError> {
-    if matches!(channel_type, ChannelType::Discord | ChannelType::Slack)
-        && let Some(url) = config.get("webhook_url").and_then(|v| v.as_str())
-    {
-        crate::services::url_validator::validate_url(url, &["https"])
-            .await
-            .map_err(|e| AppError::BadRequest(format!("Webhook URL rejected: {e}")))?;
+    match channel_type {
+        ChannelType::Discord | ChannelType::Slack => {
+            if let Some(url) = config.get("webhook_url").and_then(|v| v.as_str()) {
+                crate::services::url_validator::validate_url(url, &["https"])
+                    .await
+                    .map_err(|e| AppError::BadRequest(format!("Webhook URL rejected: {e}")))?;
+            }
+        }
+        ChannelType::Email => {
+            let smtp_host = config
+                .get("smtp_host")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let smtp_port = config
+                .get("smtp_port")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(587) as u16;
+            if smtp_host.is_empty() {
+                return Ok(()); // `validate_channel` handles the "missing required" error.
+            }
+            if DISALLOWED_SMTP_PORTS.contains(&smtp_port) {
+                return Err(AppError::BadRequest(format!(
+                    "SMTP port {smtp_port} is not allowed (reserved for non-SMTP services)"
+                )));
+            }
+            crate::services::url_validator::validate_host(&format!("{smtp_host}:{smtp_port}"))
+                .await
+                .map_err(|e| AppError::BadRequest(format!("SMTP host rejected: {e}")))?;
+        }
     }
     Ok(())
 }

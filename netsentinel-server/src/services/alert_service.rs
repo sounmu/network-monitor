@@ -164,6 +164,24 @@ async fn send_email(config: &serde_json::Value, message: &str) {
         return;
     }
 
+    // Runtime SSRF re-check. Handler-time validation is not enough: if the
+    // blocklist grew (new private-IP range, new disallowed port) after a
+    // channel was saved, or the DNS record for `smtp_host` changed to point
+    // at an internal IP, the previously-valid config would otherwise be
+    // honored. Also guards against raw DB writes that skip the handler.
+    if let Err(e) =
+        crate::services::url_validator::validate_host(&format!("{smtp_host}:{smtp_port}")).await
+    {
+        tracing::error!(
+            channel = "email",
+            smtp_host,
+            smtp_port,
+            err = %e,
+            "🚫 [Email] SSRF block — refusing to connect"
+        );
+        return;
+    }
+
     if smtp_user.is_empty() || smtp_pass.is_empty() {
         tracing::warn!(
             channel = "email",
