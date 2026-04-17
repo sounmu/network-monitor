@@ -30,6 +30,12 @@ interface SSEContextValue {
   onlineCount: number;
   /** Number of offline hosts */
   offlineCount: number;
+  /**
+   * Purge a host from both live maps after deletion.
+   * Without this the statusMap entry lingers forever and a "ghost" row keeps
+   * rendering on the Overview until a full page reload.
+   */
+  removeHost: (hostKey: string) => void;
 }
 
 const SSEContext = createContext<SSEContextValue>({
@@ -39,6 +45,7 @@ const SSEContext = createContext<SSEContextValue>({
   hostList: [],
   onlineCount: 0,
   offlineCount: 0,
+  removeHost: () => {},
 });
 
 // ──────────────────────────────────────────
@@ -113,6 +120,26 @@ export function SSEProvider({ children }: { children: React.ReactNode }) {
       rafRef.current = requestAnimationFrame(flushBuffers);
     }
   }, [flushBuffers]);
+
+  const removeHost = useCallback((hostKey: string) => {
+    // Drop the host from both user-facing maps and any pending buffered events
+    // so a late-arriving SSE frame for the doomed host cannot resurrect it.
+    delete metricsBufRef.current[hostKey];
+    delete statusBufRef.current[hostKey];
+    offlineKeysBufRef.current.delete(hostKey);
+    setMetricsMap((prev) => {
+      if (!(hostKey in prev)) return prev;
+      const next = { ...prev };
+      delete next[hostKey];
+      return next;
+    });
+    setStatusMap((prev) => {
+      if (!(hostKey in prev)) return prev;
+      const next = { ...prev };
+      delete next[hostKey];
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
     // Only connect when authenticated
@@ -239,8 +266,16 @@ export function SSEProvider({ children }: { children: React.ReactNode }) {
   }, [statusMap]);
 
   const contextValue = useMemo(
-    () => ({ metricsMap, statusMap, isConnected, hostList, onlineCount, offlineCount }),
-    [metricsMap, statusMap, isConnected, hostList, onlineCount, offlineCount],
+    () => ({
+      metricsMap,
+      statusMap,
+      isConnected,
+      hostList,
+      onlineCount,
+      offlineCount,
+      removeHost,
+    }),
+    [metricsMap, statusMap, isConnected, hostList, onlineCount, offlineCount, removeHost],
   );
 
   return (
