@@ -44,6 +44,18 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
     setLocaleState(next);
   }, []);
 
+  // Keep <html lang> in sync with the active locale. Screen readers and
+  // browser translation features key off this attribute; leaving it as the
+  // SSR-baked "en" for Korean users mispronounces names and offers to
+  // translate the page they are already reading. The root layout renders
+  // lang="en" as the SSR default (necessary — locale is client-side only);
+  // this effect upgrades it on the client once React hydrates.
+  useEffect(() => {
+    if (typeof document !== "undefined") {
+      document.documentElement.lang = locale;
+    }
+  }, [locale]);
+
   const value = useMemo(
     () => ({ locale, t: translations[locale], setLocale }),
     [locale, setLocale],
