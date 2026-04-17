@@ -16,8 +16,13 @@ pub mod kst_date_format {
     where
         S: Serializer,
     {
+        // `%:z` emits the RFC 3339 offset with a colon (`+09:00`), unlike
+        // `%z` (`+0900`) which Safari/Firefox reject in `Date.parse` edge
+        // cases and which our own `parse_from_rfc3339` (used in
+        // `deserialize` below) refuses to parse — making the previous
+        // format asymmetric with its own round-trip.
         let kst_date = date.with_timezone(&Seoul);
-        let s = format!("{}", kst_date.format("%Y-%m-%dT%H:%M:%S%z"));
+        let s = kst_date.format("%Y-%m-%dT%H:%M:%S%.3f%:z").to_string();
         serializer.serialize_str(&s)
     }
 

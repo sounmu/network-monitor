@@ -4,8 +4,7 @@ use axum::Json;
 use axum::extract::Query;
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use chrono::Utc;
-use chrono_tz::Asia::Seoul;
+use chrono::{SecondsFormat, Utc};
 use sysinfo::System;
 
 use crate::docker_cache::{DockerCache, DockerStatsCache, read_docker_cache, read_docker_stats};
@@ -46,10 +45,10 @@ pub(crate) async fn metrics_handler(
         read_docker_stats(&docker_stats_cache),
     );
 
-    let timestamp = Utc::now()
-        .with_timezone(&Seoul)
-        .format("%Y-%m-%d %H:%M:%S %Z")
-        .to_string();
+    // RFC 3339 UTC with millisecond precision. Previous format was a Seoul
+    // wall-clock string that the server silently dropped; a canonical UTC
+    // instant round-trips cleanly and lets the web client render in any tz.
+    let timestamp = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
 
     tracing::info!(
         cpu = %format!("{:.1}%", sys_result.cpu_usage),
