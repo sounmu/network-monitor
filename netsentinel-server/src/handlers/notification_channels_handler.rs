@@ -47,13 +47,18 @@ pub async fn update_channel(
     _admin: AdminGuard,
     State(state): State<Arc<AppState>>,
     Path(id): Path<i32>,
-    Json(body): Json<UpdateChannelRequest>,
+    Json(mut body): Json<UpdateChannelRequest>,
 ) -> Result<Json<NotificationChannelRow>, AppError> {
-    // If config is being updated, validate it against existing channel type
-    if let Some(config) = &body.config {
+    // If config is being updated, validate it against existing channel type.
+    // Also merge redacted placeholders back to the stored value — the GET
+    // handler masks `smtp_pass` as "********"; without this merge, a naive
+    // "edit channel name" round-trip (load → submit) would overwrite the
+    // real SMTP password with the literal mask and break all future mails.
+    if let Some(config) = &mut body.config {
         let existing = notification_channels_repo::get_by_id(&state.db_pool, id)
             .await?
             .ok_or_else(|| AppError::NotFound(format!("Notification channel {} not found", id)))?;
+        preserve_redacted_secrets(existing.channel_type, &existing.config, config);
         validate_channel(existing.channel_type, config)?;
         validate_webhook_ssrf(existing.channel_type, config).await?;
     }
@@ -62,6 +67,35 @@ pub async fn update_channel(
         .ok_or_else(|| AppError::NotFound(format!("Notification channel {} not found", id)))?;
     tracing::info!(id = id, "🔔 [Notification] Channel updated");
     Ok(Json(channel))
+}
+
+/// Placeholder value the GET handler substitutes for sensitive fields.
+/// Keep in sync with `notification_channels_repo::redact_secrets`.
+const REDACTED_PLACEHOLDER: &str = "********";
+
+/// Replace the redacted placeholder with the stored secret for fields that the
+/// server masks on read. Currently only `smtp_pass` on Email channels, but the
+/// loop shape tolerates future additions (e.g. Discord bot tokens) without
+/// touching the call site.
+fn preserve_redacted_secrets(
+    channel_type: ChannelType,
+    stored: &serde_json::Value,
+    incoming: &mut serde_json::Value,
+) {
+    let redacted_fields: &[&str] = match channel_type {
+        ChannelType::Email => &["smtp_pass"],
+        ChannelType::Discord | ChannelType::Slack => &[],
+    };
+    let Some(incoming_obj) = incoming.as_object_mut() else {
+        return;
+    };
+    for field in redacted_fields {
+        if incoming_obj.get(*field).and_then(|v| v.as_str()) == Some(REDACTED_PLACEHOLDER)
+            && let Some(original) = stored.get(*field).cloned()
+        {
+            incoming_obj.insert((*field).to_string(), original);
+        }
+    }
 }
 
 /// DELETE /api/notification-channels/{id} — delete a notification channel
