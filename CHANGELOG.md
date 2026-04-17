@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+Post-0.3.3 fixes accumulating toward v0.3.4. The v0.3.3 release is sealed on `main` as commit `bbc3718`; anything after that date lives here until the next tag.
+
+### Fixed
+
+- **Agent disk I/O rate impossible values** — user reported ~500 GB/s reads on ordinary SSDs. `compute_disk_io` cached prev-counters under a block-device key that collapsed `sda1`+`sda2` → `"sda"`; the second partition in the same cycle saw `prev_t` from μs ago, dividing a byte delta by ~10 μs → TB/s rates. Key changed to the raw partition name so each partition has its own temporal baseline; added a 500 ms min-elapsed floor as belt-and-braces. Escalation of review finding M-A2; commit `dfb4e7e` on `hardening`.
+
 ## [0.3.3] — 2026-04-17
 
 Driven by the multi-layer audit in [`docs/review-20260417.md`](docs/review-20260417.md): five parallel reviewers + a cross-layer contract reviewer produced 131 findings (2 Critical, 25 High, 55 Medium, 49 Low). This release lands fixes for the **Top 10 priority TODOs** plus the immediate follow-ons (UX cleanup, docs sync) — 23 focused commits, each mapped 1:1 to a review finding. No breaking API or DB schema changes; a new migration (`015_metrics_5min_compression.sql`) and two new optional env vars (`METRICS_TOKEN`, `METRICS_CACHE_MAX_ENTRIES` — already shipped in v0.3.2 hotfix trail) are the only operator-visible surface additions.
@@ -28,7 +36,6 @@ Driven by the multi-layer audit in [`docs/review-20260417.md`](docs/review-20260
 - **Fix hydration mismatch on public `/status` page** — timestamp now seeded in a post-hydration effect (null on SSR) with a 30 s tick; `publicFetcher` rejects non-2xx instead of silently parsing error bodies as JSON. Review findings H-W5 + M-W9.
 - **Accessible names on icon-only delete buttons** (`/monitors`, `/agents` `IconButton`) + `tabIndex={-1}` on `<main id="main-content">` so the "Skip to content" link actually moves keyboard focus in Safari/older Firefox. Review findings H-W6 + L-W2 + M-W8.
 - **Agent sysinfo serialization** — new `COLLECT_GATE` async mutex around `collect_sysinfo` so concurrent scrapes cooperate in the async layer instead of piling up on the `std::Mutex<System>` inside blocking threads. Review finding #9.
-- **Agent disk I/O rate impossible values** — user-reported bug where disks showed ~500 GB/s on ordinary SSDs. `compute_disk_io` cached prev-counters under a block-device key that collapsed `sda1`+`sda2` → `"sda"`; the second partition in the same cycle saw `prev_t` from μs ago, dividing a byte delta by ~10 μs → TB/s rates. Key changed to the raw partition name so each partition has its own temporal baseline; added a 500 ms min-elapsed floor as belt-and-braces. Escalation of review finding M-A2.
 
 ### Changed
 
