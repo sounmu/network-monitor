@@ -6,12 +6,32 @@ use sqlx::PgPool;
 
 use crate::models::app_state::{AlertConfig, MetricAlertRule};
 
+/// Alert metric type — compile-time exhaustive matching.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type)]
+#[sqlx(type_name = "TEXT", rename_all = "lowercase")]
+#[serde(rename_all = "lowercase")]
+pub enum MetricType {
+    Cpu,
+    Memory,
+    Disk,
+}
+
+impl std::fmt::Display for MetricType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MetricType::Cpu => write!(f, "cpu"),
+            MetricType::Memory => write!(f, "memory"),
+            MetricType::Disk => write!(f, "disk"),
+        }
+    }
+}
+
 /// Row struct for the `alert_configs` table
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct AlertConfigRow {
     pub id: i32,
     pub host_key: Option<String>,
-    pub metric_type: String,
+    pub metric_type: MetricType,
     pub enabled: bool,
     pub threshold: f64,
     pub sustained_secs: i32,
@@ -57,38 +77,37 @@ pub async fn load_all_as_map(pool: &PgPool) -> Result<HashMap<String, AlertConfi
 
     for row in &rows {
         if row.host_key.is_none() {
-            match row.metric_type.as_str() {
-                "cpu" => global_cpu = row_to_rule(row),
-                "memory" => global_mem = row_to_rule(row),
-                "disk" => global_disk = row_to_rule(row),
-                _ => {}
+            match row.metric_type {
+                MetricType::Cpu => global_cpu = row_to_rule(row),
+                MetricType::Memory => global_mem = row_to_rule(row),
+                MetricType::Disk => global_disk = row_to_rule(row),
             }
         }
     }
 
     // Build per-host configs using a single-pass lookup table: (host_key, metric_type) → rule
     let mut map = HashMap::new();
-    let mut host_overrides: HashMap<(&str, &str), MetricAlertRule> = HashMap::new();
+    let mut host_overrides: HashMap<(&str, MetricType), MetricAlertRule> = HashMap::new();
     let mut host_keys_set = std::collections::HashSet::new();
 
     for row in &rows {
         if let Some(ref hk) = row.host_key {
-            host_overrides.insert((hk.as_str(), row.metric_type.as_str()), row_to_rule(row));
+            host_overrides.insert((hk.as_str(), row.metric_type), row_to_rule(row));
             host_keys_set.insert(hk.as_str());
         }
     }
 
     for hk in host_keys_set {
         let cpu = host_overrides
-            .get(&(hk, "cpu"))
+            .get(&(hk, MetricType::Cpu))
             .copied()
             .unwrap_or(global_cpu);
         let mem = host_overrides
-            .get(&(hk, "memory"))
+            .get(&(hk, MetricType::Memory))
             .copied()
             .unwrap_or(global_mem);
         let disk = host_overrides
-            .get(&(hk, "disk"))
+            .get(&(hk, MetricType::Disk))
             .copied()
             .unwrap_or(global_disk);
 
@@ -140,7 +159,7 @@ pub fn resolve_alert_config(
 /// Request body for upserting an alert config entry
 #[derive(Debug, Deserialize)]
 pub struct UpsertAlertRequest {
-    pub metric_type: String,
+    pub metric_type: MetricType,
     pub enabled: bool,
     pub threshold: f64,
     pub sustained_secs: i32,
@@ -168,7 +187,7 @@ pub async fn upsert_alert_config(
         "#,
     )
     .bind(host_key)
-    .bind(&req.metric_type)
+    .bind(req.metric_type)
     .bind(req.enabled)
     .bind(req.threshold)
     .bind(req.sustained_secs)

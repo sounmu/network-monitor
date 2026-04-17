@@ -79,12 +79,7 @@ pub async fn delete_host_configs(
 }
 
 fn validate_alert_request(req: &UpsertAlertRequest) -> Result<(), AppError> {
-    if !matches!(req.metric_type.as_str(), "cpu" | "memory" | "disk") {
-        return Err(AppError::BadRequest(format!(
-            "Unsupported metric_type: {} (must be 'cpu', 'memory', or 'disk')",
-            req.metric_type
-        )));
-    }
+    // metric_type is validated at deserialization (MetricType enum) — no manual check needed.
     if !(0.0..=100.0).contains(&req.threshold) {
         return Err(AppError::BadRequest(format!(
             "threshold must be between 0 and 100, got {}",

@@ -2,12 +2,22 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 
+/// Notification delivery channel type — compile-time exhaustive matching.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
+#[sqlx(type_name = "TEXT", rename_all = "lowercase")]
+#[serde(rename_all = "lowercase")]
+pub enum ChannelType {
+    Discord,
+    Slack,
+    Email,
+}
+
 /// Row from the `notification_channels` table
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct NotificationChannelRow {
     pub id: i32,
     pub name: String,
-    pub channel_type: String,
+    pub channel_type: ChannelType,
     pub enabled: bool,
     /// JSON config — varies by channel type:
     /// Discord/Slack: { "webhook_url": "https://..." }
@@ -68,7 +78,7 @@ pub async fn get_enabled(pool: &PgPool) -> Result<Vec<NotificationChannelRow>, s
 #[derive(Debug, Deserialize)]
 pub struct CreateChannelRequest {
     pub name: String,
-    pub channel_type: String,
+    pub channel_type: ChannelType,
     pub enabled: Option<bool>,
     pub config: serde_json::Value,
 }
@@ -93,7 +103,7 @@ pub async fn create_channel(
         "#,
     )
     .bind(&req.name)
-    .bind(&req.channel_type)
+    .bind(req.channel_type)
     .bind(req.enabled.unwrap_or(true))
     .bind(&req.config)
     .fetch_one(pool)

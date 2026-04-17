@@ -45,12 +45,15 @@ pub struct TimeRangeQuery {
 /// host_key is a target-URL-based unique identifier — avoids hostname collisions.
 /// Optional `start` and `end` query params return data within that time range.
 /// If omitted, returns the most recent 50 records.
+/// SP-04: Return `Arc<Vec>` directly — `Json<Arc<Vec<T>>>` serializes via deref
+/// without cloning the Vec. Previously `Arc::unwrap_or_clone` always cloned
+/// because the cache retains its own Arc reference (refcount >= 2).
 pub async fn get_metrics_by_host_key(
     _auth: UserGuard,
     State(state): State<Arc<AppState>>,
     Path(host_key): Path<String>,
     Query(range): Query<TimeRangeQuery>,
-) -> Result<Json<Vec<MetricsRow>>, AppError> {
+) -> Result<Json<Arc<Vec<MetricsRow>>>, AppError> {
     let rows = match (range.start, range.end) {
         (Some(start), Some(end)) => {
             if start > end {
@@ -59,20 +62,15 @@ pub async fn get_metrics_by_host_key(
                 ));
             }
 
-            // All time-range queries use the in-memory TTL cache.
-            // Cache keys are rounded to 5-minute boundaries so near-identical
-            // requests share a single entry.
             let cache_key =
                 MetricsQueryCache::make_key(&host_key, start.timestamp(), end.timestamp());
             if let Some(cached) = state.metrics_query_cache.get(&cache_key) {
-                Arc::unwrap_or_clone(cached)
+                cached
             } else {
                 let result =
                     metrics_repo::fetch_metrics_range(&state.db_pool, &host_key, start, end)
                         .await?;
-                // insert() returns Arc — no clone needed
-                let arc = state.metrics_query_cache.insert(cache_key, result);
-                Arc::unwrap_or_clone(arc)
+                state.metrics_query_cache.insert(cache_key, result)
             }
         }
         (Some(_), None) | (None, Some(_)) => {
@@ -80,7 +78,7 @@ pub async fn get_metrics_by_host_key(
                 "start and end must both be provided, or both omitted".to_string(),
             ));
         }
-        _ => metrics_repo::fetch_recent_metrics(&state.db_pool, &host_key).await?,
+        _ => Arc::new(metrics_repo::fetch_recent_metrics(&state.db_pool, &host_key).await?),
     };
 
     Ok(Json(rows))
@@ -114,13 +112,14 @@ pub struct BatchMetricsRequest {
 
 /// POST /api/metrics/batch — fetch metrics for multiple hosts in a single request.
 ///
-/// Reduces HTTP overhead when the dashboard renders charts for many hosts simultaneously.
-/// Each host_key is queried concurrently, with cache applied for long-range queries.
+/// SP-03: Uses `buffer_unordered(5)` instead of `join_all` to cap concurrent DB
+/// queries at half the default pool size, preventing pool exhaustion.
+/// SP-04: Returns `Arc<Vec>` to avoid cloning cached data.
 pub async fn batch_metrics(
     _auth: UserGuard,
     State(state): State<Arc<AppState>>,
     Json(req): Json<BatchMetricsRequest>,
-) -> Result<Json<HashMap<String, Vec<MetricsRow>>>, AppError> {
+) -> Result<Json<HashMap<String, Arc<Vec<MetricsRow>>>>, AppError> {
     if req.host_keys.is_empty() {
         return Ok(Json(HashMap::new()));
     }
@@ -135,28 +134,34 @@ pub async fn batch_metrics(
         ));
     }
 
-    let futs = req.host_keys.iter().map(|host_key| {
-        let pool = &state.db_pool;
-        let cache = &state.metrics_query_cache;
-        let start = req.start;
-        let end = req.end;
-        let hk = host_key.clone();
+    use futures::stream::{self, StreamExt};
 
+    let pool = state.db_pool.clone();
+    let cache = state.metrics_query_cache.clone();
+    let start = req.start;
+    let end = req.end;
+    let host_keys = req.host_keys;
+    let num_keys = host_keys.len();
+
+    let results: Vec<_> = stream::iter(host_keys.into_iter().map(|hk| {
+        let pool = pool.clone();
+        let cache = cache.clone();
         async move {
             let cache_key = MetricsQueryCache::make_key(&hk, start.timestamp(), end.timestamp());
             let rows = if let Some(cached) = cache.get(&cache_key) {
-                Arc::unwrap_or_clone(cached)
+                cached
             } else {
-                let result = metrics_repo::fetch_metrics_range(pool, &hk, start, end).await?;
-                let arc = cache.insert(cache_key, result);
-                Arc::unwrap_or_clone(arc)
+                let result = metrics_repo::fetch_metrics_range(&pool, &hk, start, end).await?;
+                cache.insert(cache_key, result)
             };
-            Ok::<(String, Vec<MetricsRow>), AppError>((hk, rows))
+            Ok::<_, AppError>((hk, rows))
         }
-    });
+    }))
+    .buffer_unordered(5)
+    .collect()
+    .await;
 
-    let results = futures::future::join_all(futs).await;
-    let mut map = HashMap::with_capacity(req.host_keys.len());
+    let mut map = HashMap::with_capacity(num_keys);
     for result in results {
         let (hk, rows) = result?;
         map.insert(hk, rows);

@@ -1,7 +1,7 @@
 use reqwest::Client;
 use sqlx::PgPool;
 
-use crate::repositories::notification_channels_repo::{self, NotificationChannelRow};
+use crate::repositories::notification_channels_repo::{self, ChannelType, NotificationChannelRow};
 use crate::services::url_validator;
 
 // ──────────────────────────────────────────────
@@ -14,22 +14,19 @@ pub async fn send_alert(client: &Client, pool: &PgPool, message: &str) {
         .await
         .unwrap_or_default();
     for channel in &channels {
-        match channel.channel_type.as_str() {
-            "discord" => {
+        match channel.channel_type {
+            ChannelType::Discord => {
                 if let Some(url) = channel.config.get("webhook_url").and_then(|v| v.as_str()) {
                     send_discord(client, url, message).await;
                 }
             }
-            "slack" => {
+            ChannelType::Slack => {
                 if let Some(url) = channel.config.get("webhook_url").and_then(|v| v.as_str()) {
                     send_slack(client, url, message).await;
                 }
             }
-            "email" => {
+            ChannelType::Email => {
                 send_email(&channel.config, message).await;
-            }
-            _ => {
-                tracing::warn!(channel_type = %channel.channel_type, "Unknown notification channel type");
             }
         }
     }
@@ -42,8 +39,8 @@ pub async fn test_channel(client: &Client, channel: &NotificationChannelRow) -> 
         channel.name
     );
 
-    match channel.channel_type.as_str() {
-        "discord" => {
+    match channel.channel_type {
+        ChannelType::Discord => {
             let url = channel
                 .config
                 .get("webhook_url")
@@ -55,7 +52,7 @@ pub async fn test_channel(client: &Client, channel: &NotificationChannelRow) -> 
                 Err("Discord webhook request failed".to_string())
             }
         }
-        "slack" => {
+        ChannelType::Slack => {
             let url = channel
                 .config
                 .get("webhook_url")
@@ -67,11 +64,10 @@ pub async fn test_channel(client: &Client, channel: &NotificationChannelRow) -> 
                 Err("Slack webhook request failed".to_string())
             }
         }
-        "email" => {
+        ChannelType::Email => {
             send_email(&channel.config, &test_msg).await;
             Ok(())
         }
-        other => Err(format!("Unknown channel type: {}", other)),
     }
 }
 

@@ -26,7 +26,12 @@ pub struct AppState {
     pub scrape_interval_secs: u64,
     /// SSE event broadcast channel sender
     pub sse_tx: broadcast::Sender<SseBroadcast>,
-    /// Cache of the most recently sent per-host status payload
+    /// Cache of the most recently sent per-host status payload.
+    ///
+    /// Uses `std::sync::RwLock` (not `tokio::sync::RwLock`) deliberately:
+    /// lock scopes are micro-duration data shuffles with **no `.await` inside**,
+    /// so the lower per-access overhead of std RwLock beats tokio's cooperative
+    /// scheduling cost. Do not add `.await` calls inside lock scopes.
     pub last_known_status: Arc<RwLock<HashMap<String, HostStatusPayload>>>,
     /// TTL cache for long-range metric queries (avoids repeated DB scans for same range)
     pub metrics_query_cache: Arc<MetricsQueryCache>,

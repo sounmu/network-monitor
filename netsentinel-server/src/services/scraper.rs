@@ -343,6 +343,7 @@ async fn scrape_one(
                         client,
                         jwt_token,
                         system_info_updated_at,
+                        true, // hosts from list_hosts are always known
                     )
                     .await
                 }
@@ -368,6 +369,7 @@ async fn scrape_one(
 /// System info refresh interval: 24 hours
 const SYSTEM_INFO_REFRESH_SECS: i64 = 24 * 3600;
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_success(
     metrics: AgentMetrics,
     target: &str,
@@ -376,10 +378,13 @@ async fn handle_success(
     client: &Client,
     jwt_token: &str,
     system_info_updated_at: Option<DateTime<Utc>>,
+    is_known_host: bool,
 ) -> ScrapeOutcome {
-    // Auto-register host and update display_name if needed
-    if let Err(e) =
-        hosts_repo::ensure_host_registered(&state.db_pool, target, &metrics.hostname).await
+    // SP-01: Only call ensure_host_registered for unknown hosts — avoids N
+    // unnecessary DB writes per scrape cycle for already-registered hosts.
+    if !is_known_host
+        && let Err(e) =
+            hosts_repo::ensure_host_registered(&state.db_pool, target, &metrics.hostname).await
     {
         tracing::warn!(err = ?e, "⚠️ [Scraper] Failed to auto-register host");
     }
