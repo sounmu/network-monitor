@@ -1,6 +1,6 @@
 [package]
 name = "netsentinel-server"
-version = "0.3.2"
+version = "0.3.3"
 edition = "2024"
 description = "Pull-based server monitoring backend — metrics aggregation, alerts, and REST API"
 license = "Apache-2.0"
