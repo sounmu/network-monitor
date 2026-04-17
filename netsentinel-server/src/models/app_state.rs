@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 use crate::models::sse_payloads::{HostStatusPayload, SseBroadcast};
 use crate::repositories::hosts_repo::HostRow;
 use crate::repositories::metrics_repo::MetricsRow;
+use crate::services::hosts_snapshot::SharedHostsSnapshot;
 use crate::services::sse_ticket::SseTicketStore;
 use tokio::sync::broadcast;
 
@@ -54,6 +55,12 @@ pub struct AppState {
     /// login limiter (which protects against brute-force). Prevents any
     /// single IP from overwhelming the server with rapid-fire requests.
     pub api_rate_limiter: Arc<LoginRateLimiter>,
+    /// Cached view of the `hosts` + `alert_configs` tables used by the
+    /// scraper hot path. See `services::hosts_snapshot` for the refresh
+    /// protocol (invalidation on mutation handlers + 60 s background tick).
+    /// This replaced per-scrape `SELECT * FROM hosts` + `SELECT * FROM alert_configs`
+    /// round-trips (Top-10 review finding #10).
+    pub hosts_snapshot: SharedHostsSnapshot,
 }
 
 impl AppState {

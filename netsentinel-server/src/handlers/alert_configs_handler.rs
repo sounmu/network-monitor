@@ -7,6 +7,7 @@ use crate::errors::AppError;
 use crate::models::app_state::AppState;
 use crate::repositories::alert_configs_repo::{self, AlertConfigRow, UpsertAlertRequest};
 use crate::services::auth::{AdminGuard, UserGuard};
+use crate::services::hosts_snapshot;
 
 /// GET /api/alert-configs — get global default alert configs
 pub async fn get_global_configs(
@@ -29,6 +30,7 @@ pub async fn update_global_configs(
         let row = alert_configs_repo::upsert_alert_config(&state.db_pool, None, req).await?;
         results.push(row);
     }
+    hosts_snapshot::refresh(&state.db_pool, &state.hosts_snapshot).await;
     tracing::info!("🔔 [AlertConfig] Global alert configs updated");
     Ok(Json(results))
 }
@@ -57,6 +59,7 @@ pub async fn update_host_configs(
             alert_configs_repo::upsert_alert_config(&state.db_pool, Some(&host_key), req).await?;
         results.push(row);
     }
+    hosts_snapshot::refresh(&state.db_pool, &state.hosts_snapshot).await;
     tracing::info!(host_key = %host_key, "🔔 [AlertConfig] Per-host alert configs updated");
     Ok(Json(results))
 }
@@ -74,6 +77,7 @@ pub async fn delete_host_configs(
             host_key
         )));
     }
+    hosts_snapshot::refresh(&state.db_pool, &state.hosts_snapshot).await;
     tracing::info!(host_key = %host_key, "🔔 [AlertConfig] Per-host overrides deleted, reverted to global");
     Ok(Json(serde_json::json!({ "deleted": host_key })))
 }

@@ -7,6 +7,7 @@ use crate::errors::AppError;
 use crate::models::app_state::AppState;
 use crate::repositories::hosts_repo::{self, CreateHostRequest, HostRow, UpdateHostRequest};
 use crate::services::auth::{AdminGuard, UserGuard};
+use crate::services::hosts_snapshot;
 
 // ── Validation limits ────────────────────────
 const MAX_KEY_LEN: usize = 255;
@@ -107,6 +108,9 @@ pub async fn create_host(
 
     // Pre-register in last_known_status as offline
     state.pre_populate_status(std::slice::from_ref(&host));
+    // Refresh the snapshot so the scraper picks up the new host on its
+    // next cycle rather than waiting up to 60 s for the background tick.
+    hosts_snapshot::refresh(&state.db_pool, &state.hosts_snapshot).await;
 
     tracing::info!(host_key = %host.host_key, "🆕 [Hosts] New host registered");
     Ok(Json(host))
@@ -147,6 +151,8 @@ pub async fn update_host(
         .await?
         .ok_or_else(|| AppError::NotFound(format!("Host not found: {}", host_key)))?;
 
+    hosts_snapshot::refresh(&state.db_pool, &state.hosts_snapshot).await;
+
     tracing::info!(host_key = %host.host_key, "✏️ [Hosts] Host config updated");
     Ok(Json(host))
 }
@@ -169,6 +175,7 @@ pub async fn delete_host(
     if let Ok(mut store) = state.store.write() {
         store.hosts.remove(&host_key);
     }
+    hosts_snapshot::refresh(&state.db_pool, &state.hosts_snapshot).await;
 
     tracing::info!(host_key = %host_key, "🗑️ [Hosts] Host deleted");
     Ok(Json(serde_json::json!({ "deleted": host_key })))

@@ -144,6 +144,12 @@ async fn main() -> anyhow::Result<()> {
 
     let sse_ticket_store = Arc::new(services::sse_ticket::SseTicketStore::new());
 
+    // Seed the hosts + alert_configs snapshot before the router goes up so
+    // the first scrape cycle reads cached data, not the DB. `empty()` is
+    // the placeholder the cell starts with; the real content arrives from
+    // `refresh` below.
+    let hosts_snapshot = services::hosts_snapshot::empty();
+
     let state = Arc::new(AppState {
         store: Arc::new(RwLock::new(MetricsStore::new())),
         http_client: reqwest::Client::new(),
@@ -179,7 +185,13 @@ async fn main() -> anyhow::Result<()> {
                     .unwrap_or(60),
             ),
         )),
+        hosts_snapshot: hosts_snapshot.clone(),
     });
+
+    // Synchronous seed — blocks router startup only as long as two SELECTs
+    // take. Avoids a window where the scraper reads an empty snapshot.
+    services::hosts_snapshot::refresh(&state.db_pool, &hosts_snapshot).await;
+    services::hosts_snapshot::spawn_background_refresher(state.db_pool.clone(), hosts_snapshot);
 
     // Background task: evict expired cache entries every 60 seconds
     tokio::spawn(async move {

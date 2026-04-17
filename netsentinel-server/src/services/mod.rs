@@ -1,5 +1,6 @@
 pub mod alert_service;
 pub mod auth;
+pub mod hosts_snapshot;
 pub mod metrics_service;
 pub mod monitor_scraper;
 pub mod refresh_token;

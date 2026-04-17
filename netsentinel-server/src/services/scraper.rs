@@ -11,6 +11,7 @@ use crate::models::app_state::{AlertConfig, AppState, HostRecord};
 use crate::models::sse_payloads::{HostStatusPayload, SseBroadcast};
 use crate::repositories::{alert_configs_repo, hosts_repo, metrics_repo};
 use crate::services::alert_service;
+use crate::services::hosts_snapshot;
 use crate::services::metrics_service::{self, STATUS_PERIODIC_INTERVAL_SECS};
 use chrono::DateTime;
 
@@ -122,27 +123,14 @@ async fn scrape_all(
     backoff_map: &mut HashMap<String, HostBackoff>,
     jwt_cache: &mut Option<JwtCache>,
 ) {
-    // Reload the latest host list and alert configs from DB in parallel
-    let (hosts_result, alert_map_result) = tokio::join!(
-        hosts_repo::list_hosts(&state.db_pool),
-        alert_configs_repo::load_all_as_map(&state.db_pool),
-    );
-
-    let hosts = match hosts_result {
-        Ok(h) => h,
-        Err(e) => {
-            tracing::error!(err = ?e, "❌ [Scraper] Failed to load hosts from DB");
-            return;
-        }
-    };
-
-    let alert_map = match alert_map_result {
-        Ok(m) => m,
-        Err(e) => {
-            tracing::warn!(err = ?e, "⚠️ [Scraper] Failed to load alert configs, using defaults");
-            std::collections::HashMap::new()
-        }
-    };
+    // Read hosts + alert_configs from the in-memory snapshot instead of
+    // hitting the DB every 10 s. The snapshot is refreshed synchronously
+    // on every mutation handler (create/update/delete host, upsert/delete
+    // alert config) and also by a 60 s background tick as a backstop.
+    // Top-10 review finding #10.
+    let snapshot = hosts_snapshot::load(&state.hosts_snapshot);
+    let hosts = snapshot.hosts.clone();
+    let alert_map = snapshot.alert_map.clone();
 
     // Pre-register any newly added hosts in last_known_status
     state.pre_populate_status(&hosts);
