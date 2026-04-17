@@ -175,34 +175,26 @@ async fn scrape_all(
             true
         })
         .map(|host| {
-            let client = client.clone();
-            let state = state.clone();
-            let alert_config = alert_configs_repo::resolve_alert_config(
-                &host.host_key,
-                host.load_threshold,
-                &alert_map,
-            );
-            let ports: Vec<u16> = host.ports.iter().map(|&p| p as u16).collect();
-            let containers = host.containers.clone();
-            let jwt_token = jwt_token.clone();
-            let sys_info_updated = host.system_info_updated_at;
+            let ctx = ScrapeContext {
+                client: client.clone(),
+                target: host.host_key.clone(),
+                display_name: host.display_name.clone(),
+                ports: host.ports.iter().map(|&p| p as u16).collect(),
+                containers: host.containers.clone(),
+                alert_config: alert_configs_repo::resolve_alert_config(
+                    &host.host_key,
+                    host.load_threshold,
+                    &alert_map,
+                ),
+                state: state.clone(),
+                jwt_token: jwt_token.clone(),
+                system_info_updated_at: host.system_info_updated_at,
+                is_known_host: true,
+            };
 
             async move {
-                let url = host.host_key.clone();
-                let dn = host.display_name.clone();
-                let result = scrape_one(
-                    &client,
-                    &host.host_key,
-                    &host.display_name,
-                    &ports,
-                    &containers,
-                    &alert_config,
-                    &state,
-                    &jwt_token,
-                    sys_info_updated,
-                )
-                .await;
-                (url, dn, result)
+                let result = scrape_one(&ctx).await;
+                (ctx.target, ctx.display_name, result)
             }
         });
 
@@ -279,26 +271,31 @@ async fn scrape_all(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn scrape_one(
-    client: &Client,
-    target: &str,
-    display_name: &str,
-    ports: &[u16],
-    containers: &[String],
-    alert_config: &AlertConfig,
-    state: &Arc<AppState>,
-    jwt_token: &str,
+/// Per-host scrape context — groups parameters that flow through
+/// `scrape_one` → `handle_success` without long parameter lists.
+struct ScrapeContext {
+    client: Client,
+    target: String,
+    display_name: String,
+    ports: Vec<u16>,
+    containers: Vec<String>,
+    alert_config: AlertConfig,
+    state: Arc<AppState>,
+    jwt_token: String,
     system_info_updated_at: Option<DateTime<Utc>>,
-) -> ScrapeOutcome {
-    let ports_str = ports
+    is_known_host: bool,
+}
+
+async fn scrape_one(ctx: &ScrapeContext) -> ScrapeOutcome {
+    let ports_str = ctx
+        .ports
         .iter()
         .map(|p| p.to_string())
         .collect::<Vec<_>>()
         .join(",");
-    let containers_str = containers.join(",");
+    let containers_str = ctx.containers.join(",");
 
-    let mut url_str = format!("http://{}/metrics?", target);
+    let mut url_str = format!("http://{}/metrics?", ctx.target);
     if !ports_str.is_empty() {
         url_str.push_str(&format!("ports={}&", ports_str));
     }
@@ -306,9 +303,10 @@ async fn scrape_one(
         url_str.push_str(&format!("containers={}", containers_str));
     }
 
-    match client
+    match ctx
+        .client
         .get(&url_str)
-        .header("Authorization", format!("Bearer {}", jwt_token))
+        .header("Authorization", format!("Bearer {}", ctx.jwt_token))
         .send()
         .await
     {
@@ -325,38 +323,28 @@ async fn scrape_one(
                     metrics.system.processes.truncate(100);
 
                     if metrics.agent_version.is_empty() {
-                        tracing::warn!(target = %target, "⚠️ [Scraper] Agent has no version field — consider upgrading");
+                        tracing::warn!(target = %ctx.target, "⚠️ [Scraper] Agent has no version field — consider upgrading");
                     } else if semver_less_than(&metrics.agent_version, MIN_AGENT_VERSION) {
                         tracing::warn!(
-                            target = %target,
+                            target = %ctx.target,
                             agent_version = %metrics.agent_version,
                             min_version = MIN_AGENT_VERSION,
                             server_version = SERVER_VERSION,
                             "⚠️ [Scraper] Agent version below minimum — consider upgrading"
                         );
                     }
-                    handle_success(
-                        metrics,
-                        target,
-                        alert_config,
-                        state,
-                        client,
-                        jwt_token,
-                        system_info_updated_at,
-                        true, // hosts from list_hosts are always known
-                    )
-                    .await
+                    handle_success(metrics, ctx).await
                 }
                 Err(e) => ScrapeOutcome::Failed(format!("Bincode deserialization error: {}", e)),
             },
             Err(e) => ScrapeOutcome::Failed(format!("Failed to read response body: {}", e)),
         },
         Ok(_resp) => {
-            handle_down(target, display_name, state).await;
+            handle_down(&ctx.target, &ctx.display_name, &ctx.state).await;
             ScrapeOutcome::Offline
         }
         Err(_e) => {
-            handle_down(target, display_name, state).await;
+            handle_down(&ctx.target, &ctx.display_name, &ctx.state).await;
             ScrapeOutcome::Offline
         }
     }
@@ -369,43 +357,38 @@ async fn scrape_one(
 /// System info refresh interval: 24 hours
 const SYSTEM_INFO_REFRESH_SECS: i64 = 24 * 3600;
 
-#[allow(clippy::too_many_arguments)]
-async fn handle_success(
-    metrics: AgentMetrics,
-    target: &str,
-    alert_config: &AlertConfig,
-    state: &Arc<AppState>,
-    client: &Client,
-    jwt_token: &str,
-    system_info_updated_at: Option<DateTime<Utc>>,
-    is_known_host: bool,
-) -> ScrapeOutcome {
+async fn handle_success(metrics: AgentMetrics, ctx: &ScrapeContext) -> ScrapeOutcome {
     // SP-01: Only call ensure_host_registered for unknown hosts — avoids N
     // unnecessary DB writes per scrape cycle for already-registered hosts.
-    if !is_known_host
+    if !ctx.is_known_host
         && let Err(e) =
-            hosts_repo::ensure_host_registered(&state.db_pool, target, &metrics.hostname).await
+            hosts_repo::ensure_host_registered(&ctx.state.db_pool, &ctx.target, &metrics.hostname)
+                .await
     {
         tracing::warn!(err = ?e, "⚠️ [Scraper] Failed to auto-register host");
     }
 
-    match metrics_service::process_metrics(&metrics, target, state, alert_config).await {
+    match metrics_service::process_metrics(&metrics, &ctx.target, &ctx.state, &ctx.alert_config)
+        .await
+    {
         Ok(result) => {
-            tracing::info!(target = %target, "✅ [Scraper] {}", result.log_msg);
+            tracing::info!(target = %ctx.target, "✅ [Scraper] {}", result.log_msg);
 
-            let _ = state
+            let _ = ctx
+                .state
                 .sse_tx
                 .send(SseBroadcast::Metrics(result.metrics_payload));
 
             if let Some(status_payload) = result.status_payload {
-                if let Ok(mut lks) = state.last_known_status.write() {
-                    lks.insert(target.to_string(), status_payload.clone());
+                // SAFETY: no .await while lock is held
+                if let Ok(mut lks) = ctx.state.last_known_status.write() {
+                    lks.insert(ctx.target.clone(), status_payload.clone());
                 }
-                let _ = state.sse_tx.send(SseBroadcast::Status(status_payload));
+                let _ = ctx.state.sse_tx.send(SseBroadcast::Status(status_payload));
             }
         }
         Err(e) => {
-            tracing::error!(target = %target, err = ?e, "⚠️  [Scraper] process_metrics error");
+            tracing::error!(target = %ctx.target, err = ?e, "⚠️  [Scraper] process_metrics error");
             return ScrapeOutcome::Failed(format!("process_metrics error: {}", e));
         }
     }
@@ -416,10 +399,11 @@ async fn handle_success(
     // so we peek at the state under a read lock first and skip the write lock entirely.
     // Only when a transition is actually needed do we re-acquire as writer.
     let needs_recovery_check = {
-        match state.store.read() {
+        // SAFETY: no .await while lock is held
+        match ctx.state.store.read() {
             Ok(store) => store
                 .hosts
-                .get(target)
+                .get(ctx.target.as_str())
                 .is_some_and(|r| r.alert_state.offline_alerted),
             Err(e) => {
                 tracing::warn!(err = %e, "⚠️ [Scraper] Store read lock poisoned in recovery check");
@@ -429,14 +413,15 @@ async fn handle_success(
     };
 
     let recovery_msg = if needs_recovery_check {
-        let mut store = match state.store.write() {
+        // SAFETY: no .await while lock is held
+        let mut store = match ctx.state.store.write() {
             Ok(s) => s,
             Err(e) => {
                 tracing::warn!(err = %e, "⚠️ [Scraper] Store write lock poisoned in recovery check");
                 return ScrapeOutcome::Online(Box::new(metrics));
             }
         };
-        let Some(record) = store.hosts.get_mut(target) else {
+        let Some(record) = store.hosts.get_mut(ctx.target.as_str()) else {
             return ScrapeOutcome::Online(Box::new(metrics));
         };
 
@@ -465,10 +450,10 @@ async fn handle_success(
     };
 
     if let Some(msg) = recovery_msg {
-        alert_service::send_alert(&state.http_client, &state.db_pool, &msg).await;
+        alert_service::send_alert(&ctx.state.http_client, &ctx.state.db_pool, &msg).await;
         let _ = crate::repositories::alert_history_repo::insert_alert(
-            &state.db_pool,
-            target,
+            &ctx.state.db_pool,
+            &ctx.target,
             "host_recovery",
             &msg,
         )
@@ -477,15 +462,15 @@ async fn handle_success(
 
     // ── System info fetch (on reconnection or stale > 24h) ──
     let was_offline = needs_recovery_check;
-    let sys_info_stale = system_info_updated_at.is_none_or(|t| {
+    let sys_info_stale = ctx.system_info_updated_at.is_none_or(|t| {
         Utc::now().signed_duration_since(t).num_seconds() > SYSTEM_INFO_REFRESH_SECS
     });
 
     if was_offline || sys_info_stale {
-        let target_owned = target.to_string();
-        let client = client.clone();
-        let jwt = jwt_token.to_string();
-        let state = Arc::clone(state);
+        let target_owned = ctx.target.clone();
+        let client = ctx.client.clone();
+        let jwt = ctx.jwt_token.clone();
+        let state = Arc::clone(&ctx.state);
         tokio::spawn(async move {
             fetch_and_store_system_info(&client, &target_owned, &jwt, &state).await;
         });
