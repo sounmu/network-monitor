@@ -70,28 +70,20 @@ pub fn generate_user_jwt(user_id: i32, username: &str, role: &str) -> Result<Str
 }
 
 /// Decode and validate a user JWT, returning claims if valid.
-/// Accepts tokens with `aud: "user"` and legacy tokens without `aud` (backward compat).
+///
+/// Strict audience enforcement: only tokens with `aud: "user"` are accepted.
+/// The legacy no-`aud` fallback that used to live here was a privilege-
+/// escalation vector — any process holding `JWT_SECRET` (including every
+/// agent host) could mint `{sub, username:"admin", role:"admin"}` with the
+/// `aud` field omitted and gain admin access. One 401 + re-login is the
+/// correct cost; see `docs/review-20260417.md` Top-10 #3.
 pub fn decode_user_jwt(token: &str) -> Option<UserClaims> {
     let dk = DECODING_KEY.get()?;
-    // Try with aud: "user" first
     let mut user_validation = Validation::new(Algorithm::HS256);
     user_validation.set_audience(&["user"]);
-    if let Ok(data) = decode::<UserClaims>(token, dk, &user_validation) {
-        return Some(data.claims);
-    }
-    // Fallback: legacy tokens without aud claim (deprecated — plan removal)
-    let mut legacy_validation = Validation::new(Algorithm::HS256);
-    legacy_validation.validate_aud = false;
-    decode::<UserClaims>(token, dk, &legacy_validation)
+    decode::<UserClaims>(token, dk, &user_validation)
         .ok()
-        .filter(|data| data.claims.aud.is_empty()) // Only accept if no aud (legacy)
-        .map(|data| {
-            tracing::warn!(
-                username = %data.claims.username,
-                "⚠️ [Auth] Legacy token without aud accepted — upgrade client"
-            );
-            data.claims
-        })
+        .map(|data| data.claims)
 }
 
 #[cfg(test)]
