@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::{Path, Query, State};
-use axum::http::header;
+use axum::http::{HeaderMap, header};
 use axum::response::IntoResponse;
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
@@ -12,6 +12,52 @@ use crate::errors::AppError;
 use crate::models::app_state::{AppState, MetricsQueryCache};
 use crate::repositories::metrics_repo::{self, MetricsRow, UptimeSummary};
 use crate::services::auth::UserGuard;
+
+/// Optional shared-secret bearer guard for `/metrics`.
+///
+/// Unauthenticated by default (backward-compatible for operators who
+/// firewall the endpoint at the reverse proxy). If `METRICS_TOKEN` is set
+/// at startup, every scrape must present `Authorization: Bearer <token>`.
+///
+/// `OnceLock` is seeded from env once at startup by `get_metrics_token()`;
+/// rotating the token requires a server restart by design (same contract
+/// as `JWT_SECRET`).
+fn get_metrics_token() -> &'static Option<String> {
+    use std::sync::OnceLock;
+    static METRICS_TOKEN: OnceLock<Option<String>> = OnceLock::new();
+    METRICS_TOKEN.get_or_init(|| {
+        std::env::var("METRICS_TOKEN")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    })
+}
+
+fn check_metrics_auth(headers: &HeaderMap) -> Result<(), AppError> {
+    let Some(expected) = get_metrics_token().as_deref() else {
+        return Ok(()); // No token configured → open endpoint (legacy behavior).
+    };
+    let presented = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .unwrap_or("");
+    // Constant-time comparison avoids timing oracles on short-circuit equality.
+    if presented.len() == expected.len()
+        && presented
+            .as_bytes()
+            .iter()
+            .zip(expected.as_bytes())
+            .fold(0u8, |acc, (a, b)| acc | (a ^ b))
+            == 0
+    {
+        Ok(())
+    } else {
+        Err(AppError::Unauthorized(
+            "Prometheus endpoint requires a valid bearer token".into(),
+        ))
+    }
+}
 
 /// GET / — server health check
 pub async fn root_handler() -> &'static str {
@@ -229,7 +275,10 @@ fn escape_prom_label(s: &str) -> String {
 
 pub async fn prometheus_metrics(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
 ) -> Result<impl IntoResponse, AppError> {
+    check_metrics_auth(&headers)?;
+
     let store = state
         .store
         .read()
