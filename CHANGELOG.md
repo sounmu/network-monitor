@@ -5,9 +5,9 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased] — post-0.3.2 review sweep
+## [0.3.3] — 2026-04-17
 
-Driven by the multi-layer audit in [`docs/review-20260417.md`](docs/review-20260417.md): five parallel reviewers + a cross-layer contract reviewer produced 131 findings (2 Critical, 25 High, 55 Medium, 49 Low). This section tracks commits on `hardening` that land fixes from the **Top 10 priority TODOs** and the immediate follow-ons (UX cleanup, docs sync). Release tag is pending — see the `hardening` branch for the latest HEAD.
+Driven by the multi-layer audit in [`docs/review-20260417.md`](docs/review-20260417.md): five parallel reviewers + a cross-layer contract reviewer produced 131 findings (2 Critical, 25 High, 55 Medium, 49 Low). This release lands fixes for the **Top 10 priority TODOs** plus the immediate follow-ons (UX cleanup, docs sync) — 23 focused commits, each mapped 1:1 to a review finding. No breaking API or DB schema changes; a new migration (`015_metrics_5min_compression.sql`) and two new optional env vars (`METRICS_TOKEN`, `METRICS_CACHE_MAX_ENTRIES` — already shipped in v0.3.2 hotfix trail) are the only operator-visible surface additions.
 
 ### Security
 
