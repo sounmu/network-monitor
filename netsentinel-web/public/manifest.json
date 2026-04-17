@@ -1,6 +1,6 @@
 {
-  "name": "NetMonitor — Infrastructure Dashboard",
-  "short_name": "NetMonitor",
+  "name": "NetSentinel — Infrastructure Dashboard",
+  "short_name": "NetSentinel",
   "description": "Real-time server infrastructure monitoring dashboard",
   "start_url": "/",
   "display": "standalone",

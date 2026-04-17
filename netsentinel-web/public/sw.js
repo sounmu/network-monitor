@@ -1,4 +1,8 @@
-const CACHE_NAME = "netmonitor-v1";
+// Bump the suffix on every deploy that changes static assets. The
+// activate handler below drops every non-matching cache, so users pick
+// up the new bundle on next nav. Version ladder: netmonitor-v1 (pre-rename)
+// → netsentinel-v1 (post-rename, stale JS/CSS hazard fix) → future bumps.
+const CACHE_NAME = "netsentinel-v1";
 
 self.addEventListener("install", () => {
   // Skip pre-caching — Cloudflare Access may intercept and redirect
