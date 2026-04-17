@@ -30,3 +30,13 @@ argon2 = "0.5"
 base64 = "0.22"
 sha2 = "0.10"
 url = "2.5.8"
+
+# Match the agent's release profile. The server is on every hot path
+# (JSON/bincode serialization, Argon2 password hashing, reqwest outbound
+# scraping, JWT HMAC) — LTO + single codegen-unit yields ~5–15% throughput
+# on these workloads at the cost of longer build times.
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
