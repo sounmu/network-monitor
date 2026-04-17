@@ -191,7 +191,17 @@ pub async fn process_metrics(
 
     // Allocate once outside the lock to avoid redundant .to_string()/.clone() inside it.
     let target_str = target.to_string();
-    let server_ts = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+    // Prefer the agent-provided timestamp when it parses as RFC 3339; fall
+    // back to the server's own wall-clock otherwise. Agents now emit UTC
+    // RFC 3339 (v0.3.3); older agents that still send a KST wall-clock
+    // string silently fall through to the server fallback — the old contract
+    // dropped the field entirely, so no behavior regresses.
+    let server_ts = chrono::DateTime::parse_from_rfc3339(&metrics.timestamp)
+        .map(|dt| {
+            dt.with_timezone(&Utc)
+                .to_rfc3339_opts(SecondsFormat::Millis, true)
+        })
+        .unwrap_or_else(|_| Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true));
 
     // ── Lock region: only lightweight data manipulation ──
     // AlertMetricPoint is a Copy type (~20 B), so pushing inside the lock is trivially cheap.
