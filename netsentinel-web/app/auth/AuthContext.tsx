@@ -107,7 +107,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [user, isLoading, login, logout],
   );
 
-  if (isLoading) {
+  // Public paths (/login, /setup, /status) must render immediately — they
+  // are the surfaces that *handle* the "no session" case. Blanking them
+  // while the initial refresh attempt resolves defeats the point (users
+  // staring at an empty page during the 4 s refresh timeout on a broken
+  // backend). Let them render regardless of isLoading.
+  const isPublic = PUBLIC_PATHS.some(
+    (p) => pathname === p || pathname.startsWith(p + "/"),
+  );
+  if (isLoading && !isPublic) {
     return null;
   }
 
@@ -115,9 +123,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // guard, SWR hooks in the child tree mount for a single frame before
   // the redirect useEffect fires, fire unauthenticated fetches that
   // return 401, trigger handleUnauthorized → hard reload, and loop.
-  const isPublic = PUBLIC_PATHS.some(
-    (p) => pathname === p || pathname.startsWith(p + "/"),
-  );
   if (!user && !isPublic) {
     return null;
   }

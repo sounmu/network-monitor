@@ -12,7 +12,7 @@ import {
   ApiError,
   AuthStatus,
   getAuthStatusUrl,
-  fetcher,
+  publicFetcher,
 } from "@/app/lib/api";
 
 export default function LoginPage() {
@@ -24,7 +24,11 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
 
-  const { data: authStatus } = useSWR<AuthStatus>(getAuthStatusUrl(), fetcher);
+  const { data: authStatus } = useSWR<AuthStatus>(
+    getAuthStatusUrl(),
+    publicFetcher,
+    { revalidateOnFocus: false, dedupingInterval: 60_000 },
+  );
 
   // Redirect to setup if no users exist
   useEffect(() => {

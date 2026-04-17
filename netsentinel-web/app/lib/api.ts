@@ -111,6 +111,25 @@ function authHeaders(): HeadersInit {
   };
 }
 
+/**
+ * Plain fetcher for endpoints that must NOT trigger the refresh-then-logout
+ * flow on a 401 — namely the unauthenticated `/api/auth/status`, `/api/public/*`,
+ * and `/api/health` routes. Used by login/setup/status pages. Returns typed
+ * JSON, throws `ApiError` on any non-2xx.
+ */
+export const publicFetcher = async <T>(url: string): Promise<T> => {
+  const res = await fetch(url, {
+    credentials: "include",
+    headers: { Accept: "application/json" },
+    mode: "cors",
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new ApiError(res.status, text || `API Error: ${res.status} ${res.statusText}`);
+  }
+  return res.json();
+};
+
 export const fetcher = async <T>(url: string): Promise<T> => {
   const doFetch = async () => {
     const token = getAccessToken();
@@ -494,9 +513,16 @@ export const issueSseTicket = () =>
  * Best-effort: clients must still clear local state regardless of the
  * outcome (network down, server restarting, etc.). Never throws — the
  * UI should fall through to the local logout cleanup unconditionally.
+ *
+ * Bounded at 4 s — same rationale as `doRefreshOnce`: a hung backend must
+ * not strand the UI in "looks logged in" state. The caller clears local
+ * state in its `.finally`, so the timeout only controls how fast that
+ * cleanup runs.
  */
 export const serverLogout = async (): Promise<void> => {
   const token = getAccessToken();
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 4000);
   try {
     await fetch(`${API_BASE}/api/auth/logout`, {
       method: "POST",
@@ -505,9 +531,12 @@ export const serverLogout = async (): Promise<void> => {
         Accept: "application/json",
         ...(token && { Authorization: `Bearer ${token}` }),
       },
+      signal: controller.signal,
     });
   } catch {
     // Swallow — the local logout path will still clear the token and redirect.
+  } finally {
+    clearTimeout(timeoutId);
   }
 };
 
