@@ -5,6 +5,23 @@
 >
 > **Seed color:** Blue (#3B82F6) · **Theming:** CSS custom properties in `globals.css`
 
+## ⚠️ Golden Rules — Read Before Any UI Work
+
+These rules apply to every component, page, and style change. Violations must be corrected before submitting.
+
+| ❌ Never use | ✅ Use instead |
+|---|---|
+| Hardcoded colors: `#3B82F6`, `blue`, `rgba(0,0,0,0.5)` | `var(--md-sys-color-*)` or `var(--md-custom-color-*)` |
+| `box-shadow` for elevation | `background: var(--md-sys-color-surface-container-*)` |
+| Raw border-radius: `border-radius: 12px` | `var(--md-sys-shape-corner-*)` |
+| Raw font styles: `font-size: 14px; font-weight: 500` | `font: var(--md-sys-typescale-*)` |
+| Raw transitions: `transition: 0.2s ease` | `var(--md-sys-motion-duration-*) var(--md-sys-motion-easing-*)` |
+| Pure black in dark mode: `background: #000` | `var(--md-sys-color-surface)` or `surface-container-*` |
+| State layers via `opacity` or `:hover { background: #eee }` | `color-mix(in srgb, var(--md-sys-color-on-*) 8%, transparent)` |
+| New custom CSS variables outside the token system | Extend via `--md-custom-color-*` only if truly necessary |
+
+> If you find yourself writing a raw value, stop and find the correct token in this document first.
+
 ---
 
 ## Adaptations from M3
@@ -889,9 +906,5 @@ For loading states in metric fetching and SSE connection:
 - [ ] Ensure touch targets meet minimum size requirements
 
 ### Rules
-- **Never use hardcoded colors** — always reference `--md-sys-*` or `--md-custom-*` tokens.
-- **State layers** — hover/focus/pressed use `color-mix()` with `on-*` color at 8%/12%/12%.
-- **Dark mode** — surfaces use tonal `surface-container` values, never pure black (#000).
-- **Accessibility** — 4.5:1 contrast for body text, 3:1 for large text and UI components.
-- **Motion** — always use token-based durations and easings, never raw values.
-- **Chart colors** — always use `--md-chart-*` tokens for data series.
+
+All rules are consolidated at the top of this document under **⚠️ Golden Rules**. The checklist above assumes those rules are already satisfied — do not mark a phase complete if any Golden Rule is violated.
