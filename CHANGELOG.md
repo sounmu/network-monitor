@@ -12,6 +12,7 @@ Post-0.3.3 fixes accumulating toward v0.3.4. The v0.3.3 release is sealed on `ma
 ### Fixed
 
 - **Agent disk I/O rate impossible values** — user reported ~500 GB/s reads on ordinary SSDs. `compute_disk_io` cached prev-counters under a block-device key that collapsed `sda1`+`sda2` → `"sda"`; the second partition in the same cycle saw `prev_t` from μs ago, dividing a byte delta by ~10 μs → TB/s rates. Key changed to the raw partition name so each partition has its own temporal baseline; added a 500 ms min-elapsed floor as belt-and-braces. Escalation of review finding M-A2; commit `dfb4e7e` on `hardening`.
+- **Docker stats no longer silently drop containers after the first 50** — `poll_container_stats` used `.take(50)` plus `join_all`, so hosts with more than 50 running containers got a truncated stats cache and unbounded fan-out at Docker's daemon. Replaced with `stream::iter(...).buffer_unordered(16)` and a soft warn log past 200 running containers. All running containers are now observed while concurrency pressure on the Docker socket stays bounded. Review finding #16 from `docs/review-20260418.md`.
 
 ## [0.3.3] — 2026-04-17
 
