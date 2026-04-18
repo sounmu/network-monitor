@@ -182,6 +182,7 @@ pub async fn process_metrics(
     target: &str,
     state: &AppState,
     alert_config: &AlertConfig,
+    scrape_interval_secs: u64,
 ) -> Result<ProcessResult, AppError> {
     tracing::debug!(hostname = %metrics.hostname, is_online = %metrics.is_online, "Processing metrics (overview)");
     tracing::trace!(metrics = ?metrics, "Detailed metrics JSON data");
@@ -305,6 +306,7 @@ pub async fn process_metrics(
         Some(HostStatusPayload {
             host_key: metrics_payload.host_key.clone(),
             display_name: hostname.clone(),
+            scrape_interval_secs,
             is_online: metrics.is_online,
             last_seen: server_ts,
             docker_containers: metrics.docker_containers.clone(),

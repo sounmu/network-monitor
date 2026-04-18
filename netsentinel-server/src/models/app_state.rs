@@ -76,6 +76,10 @@ impl AppState {
                 .or_insert_with(|| HostStatusPayload {
                     host_key: host.host_key.clone(),
                     display_name: host.display_name.clone(),
+                    scrape_interval_secs: u64::try_from(host.scrape_interval_secs)
+                        .ok()
+                        .filter(|secs| *secs > 0)
+                        .unwrap_or(self.scrape_interval_secs),
                     is_online: false,
                     last_seen: String::new(),
                     docker_containers: vec![],

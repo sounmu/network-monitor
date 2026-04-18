@@ -60,6 +60,8 @@ pub struct HostStatusPayload {
     pub host_key: String,
     /// Agent-reported hostname — used for UI display only
     pub display_name: String,
+    /// Effective scrape cadence for this host (seconds).
+    pub scrape_interval_secs: u64,
     pub is_online: bool,
     pub last_seen: String,
     pub docker_containers: Vec<DockerContainer>,

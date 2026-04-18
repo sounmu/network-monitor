@@ -30,6 +30,9 @@ use std::sync::Arc;
 use std::sync::RwLock;
 use std::time::Duration;
 
+use chrono::Utc;
+
+use crate::models::agent_metrics::SystemInfoResponse;
 use crate::models::app_state::AlertConfig;
 use crate::repositories::alert_configs_repo;
 use crate::repositories::hosts_repo::{self, HostRow};
@@ -68,6 +71,44 @@ pub fn load(cell: &SharedHostsSnapshot) -> Arc<HostsSnapshot> {
         Err(poisoned) => {
             tracing::warn!("⚠️ [HostsSnapshot] RwLock poisoned on read, recovering");
             poisoned.into_inner().clone()
+        }
+    }
+}
+
+/// Update a single host's cached static system info without a full DB reload.
+/// Used after a successful `/system-info` fetch so the scraper does not keep
+/// seeing a stale `system_info_updated_at` until the 60 s background refresh.
+pub fn apply_system_info(cell: &SharedHostsSnapshot, host_key: &str, info: &SystemInfoResponse) {
+    let current = load(cell);
+    let mut hosts = current.hosts.clone();
+    let mut updated = false;
+
+    for host in &mut hosts {
+        if host.host_key == host_key {
+            host.os_info = Some(info.os.clone());
+            host.cpu_model = Some(info.cpu_model.clone());
+            host.memory_total_mb = Some(info.memory_total_mb as i64);
+            host.boot_time = Some(info.boot_time as i64);
+            host.ip_address = Some(info.ip_address.clone());
+            host.system_info_updated_at = Some(Utc::now());
+            updated = true;
+            break;
+        }
+    }
+
+    if !updated {
+        return;
+    }
+
+    let new_snapshot = Arc::new(HostsSnapshot {
+        hosts,
+        alert_map: current.alert_map.clone(),
+    });
+    match cell.write() {
+        Ok(mut guard) => *guard = new_snapshot,
+        Err(poisoned) => {
+            tracing::warn!("⚠️ [HostsSnapshot] RwLock poisoned on apply_system_info, recovering");
+            *poisoned.into_inner() = new_snapshot;
         }
     }
 }
