@@ -8,7 +8,7 @@ use crate::models::{DockerContainer, DockerContainerStats};
 use bollard::Docker;
 use bollard::models::EventMessage;
 use bollard::query_parameters::{EventsOptions, ListContainersOptions, StatsOptions};
-use futures_util::StreamExt;
+use futures_util::{StreamExt, stream};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -335,6 +335,14 @@ pub(crate) async fn docker_stats_poller(
     }
 }
 
+/// Upper bound on concurrent Docker `stats` calls per poll cycle.
+/// Replaces the previous hard `take(50)` cap so every running container is
+/// observed, while still bounding pressure on the Docker daemon.
+const STATS_POLL_CONCURRENCY: usize = 16;
+/// Soft threshold for a warning log when a host runs an unusually large
+/// number of containers — makes silent fan-out visible to operators.
+const STATS_POLL_WARN_THRESHOLD: usize = 200;
+
 /// Single poll cycle: fetch stats for all running containers.
 /// Returns Err(()) if the Docker client should be reconnected.
 async fn poll_container_stats(
@@ -347,10 +355,18 @@ async fn poll_container_stats(
         containers
             .iter()
             .filter(|c| c.state == "running")
-            .take(50)
             .map(|c| c.container_name.clone())
             .collect()
     };
+
+    if running.len() > STATS_POLL_WARN_THRESHOLD {
+        tracing::warn!(
+            count = running.len(),
+            threshold = STATS_POLL_WARN_THRESHOLD,
+            concurrency = STATS_POLL_CONCURRENCY,
+            "Docker stats poll is running against a large container set"
+        );
+    }
 
     if running.is_empty() {
         let mut cache = stats_cache.write().await;
@@ -358,7 +374,7 @@ async fn poll_container_stats(
         return Ok(());
     }
 
-    let futures = running.into_iter().map(|name| {
+    let stats_futures = running.into_iter().map(|name| {
         let docker = docker.clone();
         async move {
             let options = StatsOptions {
@@ -420,7 +436,10 @@ async fn poll_container_stats(
         }
     });
 
-    let results: Vec<Option<DockerContainerStats>> = futures_util::future::join_all(futures).await;
+    let results: Vec<Option<DockerContainerStats>> = stream::iter(stats_futures)
+        .buffer_unordered(STATS_POLL_CONCURRENCY)
+        .collect()
+        .await;
 
     // Atomic swap: build new map first, then replace to avoid readers seeing empty cache
     let mut new_map = HashMap::with_capacity(results.len());
