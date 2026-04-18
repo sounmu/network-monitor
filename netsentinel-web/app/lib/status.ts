@@ -12,10 +12,7 @@
 
 export type HostStatus = "online" | "pending" | "offline";
 
-/** Must match scrape_interval_secs in config */
-const SCRAPE_INTERVAL_SEC = 10;
-const PENDING_THRESHOLD_SEC = SCRAPE_INTERVAL_SEC;        // > 10s -> pending
-const OFFLINE_THRESHOLD_SEC = SCRAPE_INTERVAL_SEC * 3;   // > 30s -> offline
+const DEFAULT_SCRAPE_INTERVAL_SEC = 10;
 
 /**
  * Determine host status based on SSE payload.
@@ -27,7 +24,14 @@ const OFFLINE_THRESHOLD_SEC = SCRAPE_INTERVAL_SEC * 3;   // > 30s -> offline
 export function getHostStatus(
   lastSeen: string | null,
   isOnline?: boolean,
+  scrapeIntervalSec = DEFAULT_SCRAPE_INTERVAL_SEC,
 ): HostStatus {
+  const effectiveInterval = Number.isFinite(scrapeIntervalSec) && scrapeIntervalSec > 0
+    ? scrapeIntervalSec
+    : DEFAULT_SCRAPE_INTERVAL_SEC;
+  const pendingThresholdSec = effectiveInterval;
+  const offlineThresholdSec = effectiveInterval * 3;
+
   // Server explicitly determined as down — takes priority over timestamp calculation
   // However, if last_seen is absent, it has never been scraped, so return "pending" (status unknown)
   if (isOnline === false) {
@@ -39,8 +43,8 @@ export function getHostStatus(
 
   const diffSec = (Date.now() - new Date(lastSeen).getTime()) / 1000;
 
-  if (diffSec <= PENDING_THRESHOLD_SEC) return "online";
-  if (diffSec <= OFFLINE_THRESHOLD_SEC) return "pending";
+  if (diffSec <= pendingThresholdSec) return "online";
+  if (diffSec <= offlineThresholdSec) return "pending";
   return "offline";
 }
 

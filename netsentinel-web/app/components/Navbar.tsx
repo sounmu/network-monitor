@@ -27,13 +27,6 @@ export default function Navbar() {
   const { theme, toggleTheme } = useTheme();
   const { user, logout } = useAuth();
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [prevPathname, setPrevPathname] = useState(pathname);
-
-  // Auto-close mobile menu on route change
-  if (prevPathname !== pathname) {
-    setPrevPathname(pathname);
-    setMobileOpen(false);
-  }
 
   // Hide navbar on login/setup pages (after all hooks)
   if (HIDDEN_PATHS.includes(pathname)) return null;

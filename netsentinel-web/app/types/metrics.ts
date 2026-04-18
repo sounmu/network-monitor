@@ -127,6 +127,7 @@ export interface HostStatusPayload {
   host_key: string;
   /** Actual hostname reported by the agent — for UI display */
   display_name: string;
+  scrape_interval_secs: number;
   is_online: boolean;
   last_seen: string;
   docker_containers: DockerContainer[];

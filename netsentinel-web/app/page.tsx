@@ -1,12 +1,12 @@
 "use client";
 
+import Link from "next/link";
 import { useSSE } from "@/app/lib/sse-context";
 import {
   getHostStatus,
   STATUS_DOT_CLASS,
   HostStatus,
 } from "@/app/lib/status";
-import { useRouter } from "next/navigation";
 import React, { useMemo } from "react";
 import { useI18n } from "@/app/i18n/I18nContext";
 import { Activity } from "lucide-react";
@@ -54,7 +54,6 @@ interface HostRow {
 }
 
 export default function HomePage() {
-  const router = useRouter();
   const { metricsMap, statusMap, isConnected } = useSSE();
   const { t } = useI18n();
 
@@ -63,7 +62,7 @@ export default function HomePage() {
       const metrics = metricsMap[status.host_key];
       const lastSeen = metrics?.timestamp ?? status.last_seen ?? null;
       const isOnline = metrics?.is_online ?? status.is_online ?? false;
-      const hostStatus = getHostStatus(lastSeen, isOnline);
+      const hostStatus = getHostStatus(lastSeen, isOnline, status.scrape_interval_secs);
 
       // Root disk usage: pick "/" mount or highest usage partition
       const disks = status.disks ?? [];
@@ -212,11 +211,6 @@ export default function HomePage() {
                   return (
                     <tr
                       key={host.host_key}
-                      tabIndex={0}
-                      role="link"
-                      onClick={() => router.push(`/host/${encodeURIComponent(host.host_key)}`)}
-                      onKeyDown={(e) => { if (e.key === "Enter") router.push(`/host/${encodeURIComponent(host.host_key)}`); }}
-                      style={{ cursor: "pointer" }}
                     >
                       <td>
                         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -235,7 +229,12 @@ export default function HomePage() {
                                 textOverflow: "ellipsis",
                               }}
                             >
-                              {host.display_name}
+                              <Link
+                                href={`/host/${encodeURIComponent(host.host_key)}`}
+                                style={{ color: "inherit", textDecoration: "none" }}
+                              >
+                                {host.display_name}
+                              </Link>
                             </div>
                             {host.display_name !== host.host_key && (
                               <div

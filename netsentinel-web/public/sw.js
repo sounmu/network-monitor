@@ -20,13 +20,29 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("fetch", (event) => {
   const { request } = event;
+  const url = new URL(request.url);
 
-  // Only handle same-origin GET requests for pages/assets
+  // Only handle immutable same-origin static assets.
+  // Never cache authenticated document/RSC responses.
   if (
     request.method !== "GET" ||
-    request.url.includes("/api/") ||
-    !request.url.startsWith(self.location.origin)
+    !url.href.startsWith(self.location.origin) ||
+    url.pathname.startsWith("/api/") ||
+    request.destination === "document" ||
+    url.searchParams.has("_rsc")
   ) {
+    return;
+  }
+
+  const isStaticAsset =
+    url.pathname.startsWith("/_next/static/") ||
+    request.destination === "style" ||
+    request.destination === "script" ||
+    request.destination === "font" ||
+    request.destination === "image" ||
+    url.pathname === "/manifest.json";
+
+  if (!isStaticAsset) {
     return;
   }
 

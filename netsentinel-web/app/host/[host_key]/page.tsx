@@ -2,6 +2,7 @@
 
 import { use } from "react";
 import dynamic from "next/dynamic";
+import { notFound } from "next/navigation";
 import { useSSE } from "@/app/lib/sse-context";
 const TimeSeriesChart = dynamic(
   () => import("@/app/components/TimeSeriesChart"),
@@ -96,7 +97,13 @@ export default function HostPage({ params }: Props) {
   const latestTimestamp = liveMetrics?.timestamp ?? statusData?.last_seen ?? null;
 
   const isOnline = liveMetrics?.is_online ?? statusData?.is_online;
-  const hostStatus = latestTimestamp ? getHostStatus(latestTimestamp, isOnline) : "pending";
+  const hostStatus = latestTimestamp
+    ? getHostStatus(latestTimestamp, isOnline, statusData?.scrape_interval_secs)
+    : "pending";
+
+  if (isConnected && !hasData && !(decodedHostKey in statusMap)) {
+    notFound();
+  }
 
   return (
     <div className="fade-in">
