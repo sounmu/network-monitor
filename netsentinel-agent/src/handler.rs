@@ -13,6 +13,8 @@ use crate::ports::{collect_ports, parse_comma_separated_ports};
 use crate::sysinfo_collector::collect_sysinfo;
 
 const AGENT_VERSION: &str = env!("CARGO_PKG_VERSION");
+const MAX_CONTAINER_SELECTORS: usize = 100;
+const MAX_METRICS_PAYLOAD_BYTES: usize = 10 * 1024 * 1024;
 
 #[tracing::instrument(skip(docker_cache, docker_stats_cache, query))]
 pub(crate) async fn metrics_handler(
@@ -29,10 +31,16 @@ pub(crate) async fn metrics_handler(
         .unwrap_or_default();
     monitor_ports.truncate(100);
 
-    let target_containers = query
-        .containers
-        .as_ref()
-        .map(|c| c.split(',').map(|s| s.trim().to_string()).collect());
+    let target_containers = query.containers.as_ref().map(|c| {
+        let mut seen = std::collections::HashSet::new();
+        c.split(',')
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .filter(|name| seen.insert((*name).to_string()))
+            .take(MAX_CONTAINER_SELECTORS)
+            .map(str::to_string)
+            .collect()
+    });
 
     // Run sysinfo (which includes a 200 ms blocking sleep for CPU delta), port checks,
     // and Docker cache read in parallel. Docker state is served from the in-memory
@@ -93,6 +101,15 @@ pub(crate) async fn metrics_handler(
             return (StatusCode::INTERNAL_SERVER_ERROR, "serialization error").into_response();
         }
     };
+
+    if bytes.len() > MAX_METRICS_PAYLOAD_BYTES {
+        tracing::warn!(
+            size = bytes.len(),
+            max = MAX_METRICS_PAYLOAD_BYTES,
+            "⚠️ [Metrics] payload exceeds hard size limit"
+        );
+        return (StatusCode::PAYLOAD_TOO_LARGE, "metrics payload too large").into_response();
+    }
 
     ([(header::CONTENT_TYPE, "application/octet-stream")], bytes).into_response()
 }
