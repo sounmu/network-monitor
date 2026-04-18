@@ -9,8 +9,9 @@ import {
 } from "@/app/lib/status";
 import React, { useMemo } from "react";
 import { useI18n } from "@/app/i18n/I18nContext";
-import { Activity } from "lucide-react";
+import { Activity, LayoutDashboard } from "lucide-react";
 import { formatNetworkSpeed } from "@/app/lib/formatters";
+import { PageHeader } from "@/app/components/PageHeader";
 
 /**
  * Column-header labels stay in the primary on-surface color for a clean
@@ -105,52 +106,32 @@ export default function HomePage() {
   const isLoading = !isConnected && hosts.length === 0;
 
   return (
-    <div className="fade-in">
-      <div className="glass-card" style={{ overflow: "hidden" }}>
-        {/* Table header bar */}
-        <div
-          style={{
-            padding: "14px 20px",
-            borderBottom: "1px solid var(--border-subtle)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            gap: 12,
-          }}
-        >
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <h1 style={{ fontSize: 16, fontWeight: 700, color: "var(--text-primary)" }}>
-              {t.overview.title}
-            </h1>
-            <span
-              style={{
-                fontSize: 11,
-                color: "var(--text-muted)",
-                background: "var(--bg-muted)",
-                padding: "2px 8px",
-                borderRadius: 6,
-                fontWeight: 500,
-              }}
-            >
-              {hosts.length}
-            </span>
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 12, fontSize: 12, color: "var(--text-muted)" }}>
-            {onlineCount > 0 && (
-              <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                <span className="pulse-dot green" style={{ width: 6, height: 6 }} />
-                {onlineCount} {t.overview.online}
-              </span>
-            )}
-            {offlineCount > 0 && (
-              <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                <span className="pulse-dot red" style={{ width: 6, height: 6 }} />
-                {offlineCount} {t.overview.offline}
-              </span>
-            )}
-          </div>
-        </div>
+    <div className="page-content fade-in">
+      <PageHeader
+        icon={<LayoutDashboard size={18} aria-hidden="true" />}
+        title={t.overview.title}
+        badge={hosts.length}
+        right={
+          (onlineCount > 0 || offlineCount > 0) ? (
+            <div className="page-header__stats">
+              {onlineCount > 0 && (
+                <span className="page-header__stats-item">
+                  <span className="pulse-dot green" style={{ width: 6, height: 6 }} />
+                  {onlineCount} {t.overview.online}
+                </span>
+              )}
+              {offlineCount > 0 && (
+                <span className="page-header__stats-item">
+                  <span className="pulse-dot red" style={{ width: 6, height: 6 }} />
+                  {offlineCount} {t.overview.offline}
+                </span>
+              )}
+            </div>
+          ) : undefined
+        }
+      />
 
+      <div className="glass-card" style={{ overflow: "hidden" }}>
         {isLoading && (
           <div style={{ padding: 20 }}>
             {[1, 2, 3].map((i) => (

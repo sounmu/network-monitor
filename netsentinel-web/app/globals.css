@@ -617,6 +617,77 @@ body {
   /* no padding needed — app-layout handles it */
 }
 
+/* ── Shared page header ────────────────────────────
+   Used by all top-level pages (overview, agents, alerts, monitors,
+   status). Kept intentionally compact — icon + 16/700 title + optional
+   count chip + right-aligned actions — so the whole app shares the
+   same header rhythm.
+   ─────────────────────────────────────────────── */
+.page-header {
+  margin-bottom: 20px;
+}
+.page-header__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 32px;
+}
+.page-header__icon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--accent-blue);
+  flex-shrink: 0;
+}
+.page-header__title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: -0.1px;
+  margin: 0;
+  line-height: 1.2;
+}
+.page-header__badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  color: var(--text-muted);
+  background: var(--bg-muted);
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+}
+.page-header__actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.page-header__desc {
+  margin: 6px 0 0 0;
+  font-size: 13px;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+.page-header--align-center .page-header__row {
+  justify-content: center;
+}
+.page-header--align-center .page-header__desc {
+  text-align: center;
+}
+.page-header__stats {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.page-header__stats-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
 /* ── Chart grid ─── */
 .chart-grid {
   display: grid;
@@ -686,13 +757,17 @@ body {
 }
 
 .inline-meter-value {
-  min-width: 44px;
+  /* Left-aligned so the "50.0%" value sits on the same x coordinate as
+     its column header ("CPU", "Memory" …), keeping a clean vertical
+     reading column even as values change width. */
+  min-width: 48px;
   font-size: 12px;
   font-family: var(--font-mono), monospace;
   font-weight: 600;
   flex-shrink: 0;
-  text-align: right;
+  text-align: left;
   letter-spacing: -0.1px;
+  font-variant-numeric: tabular-nums;
 }
 
 .inline-meter-bar {

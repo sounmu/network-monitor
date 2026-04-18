@@ -13,6 +13,7 @@ import {
 } from "@/app/lib/api";
 import { HostSummary } from "@/app/types/metrics";
 import { useI18n } from "@/app/i18n/I18nContext";
+import { PageHeader } from "@/app/components/PageHeader";
 import { AlertsTabs, type AlertTab, useAlertsTab } from "./components/AlertsTabs";
 import { AlertsSummaryBar } from "./components/AlertsSummaryBar";
 import { ActiveAlertsPanel } from "./components/ActiveAlertsPanel";
@@ -67,26 +68,11 @@ function AlertsPageInner() {
 
   return (
     <div className="page-content fade-in">
-      {/* Header — matches monitors/agents pattern */}
-      <div style={{ marginBottom: 20 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
-          <Bell size={20} color="var(--accent-blue)" aria-hidden="true" />
-          <h1
-            style={{
-              fontSize: 22,
-              fontWeight: 800,
-              color: "var(--text-primary)",
-              letterSpacing: "-0.3px",
-              margin: 0,
-            }}
-          >
-            {t.alerts.title}
-          </h1>
-        </div>
-        <p style={{ color: "var(--text-muted)", fontSize: 13, margin: 0 }}>
-          {t.alerts.description}
-        </p>
-      </div>
+      <PageHeader
+        icon={<Bell size={18} aria-hidden="true" />}
+        title={t.alerts.title}
+        description={t.alerts.description}
+      />
 
       <AlertsSummaryBar
         rulesCount={rulesCount}

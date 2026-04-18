@@ -11,6 +11,7 @@ import {
   fetcher,
 } from "@/app/lib/api";
 import { useI18n } from "@/app/i18n/I18nContext";
+import { PageHeader } from "@/app/components/PageHeader";
 
 function MiniField({ label, id, children }: { label: string; id?: string; children: React.ReactNode }) {
   return (
@@ -29,15 +30,10 @@ export default function MonitorsPage() {
 
   return (
     <div className="page-content fade-in">
-      {/* Header */}
-      <div style={{ marginBottom: 28 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
-          <Globe size={20} color="var(--accent-blue)" />
-          <h1 style={{ fontSize: 22, fontWeight: 800, color: "var(--text-primary)", letterSpacing: "-0.3px" }}>
-            {t.monitors.title}
-          </h1>
-        </div>
-      </div>
+      <PageHeader
+        icon={<Globe size={18} aria-hidden="true" />}
+        title={t.monitors.title}
+      />
 
       {/* Tab buttons */}
       <div style={{ display: "flex", gap: 8, marginBottom: 24 }}>

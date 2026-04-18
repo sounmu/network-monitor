@@ -5,6 +5,7 @@ import useSWR from "swr";
 import { CheckCircle, XCircle, Shield } from "lucide-react";
 import { PublicHostStatus, getPublicStatusUrl, publicFetcher } from "@/app/lib/api";
 import { useI18n } from "@/app/i18n/I18nContext";
+import { PageHeader } from "@/app/components/PageHeader";
 
 function getUptimeColor(pct: number): string {
   if (pct >= 99.5) return "var(--accent-green)";
@@ -38,18 +39,12 @@ export default function StatusPage() {
 
   return (
     <div className="page-content fade-in" style={{ maxWidth: 720, margin: "0 auto" }}>
-      {/* Header */}
-      <div style={{ textAlign: "center", marginBottom: 32 }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10, marginBottom: 8 }}>
-          <Shield size={24} color="var(--accent-blue)" />
-          <h1 style={{ fontSize: 24, fontWeight: 800, color: "var(--text-primary)" }}>
-            {t.statusPage.title}
-          </h1>
-        </div>
-        <p style={{ color: "var(--text-muted)", fontSize: 13 }}>
-          {t.statusPage.subtitle}
-        </p>
-      </div>
+      <PageHeader
+        icon={<Shield size={18} aria-hidden="true" />}
+        title={t.statusPage.title}
+        description={t.statusPage.subtitle}
+        align="center"
+      />
 
       {/* Overall status banner */}
       <div
