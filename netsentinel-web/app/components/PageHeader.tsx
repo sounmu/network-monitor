@@ -39,7 +39,7 @@ export function PageHeader({
   align = "start",
 }: PageHeaderProps) {
   return (
-    <header className={`page-header page-header--align-${align}`}>
+    <header className={`glass-card page-header page-header--align-${align}`}>
       <div className="page-header__row">
         {icon && <span className="page-header__icon">{icon}</span>}
         <h1 className="page-header__title">{title}</h1>

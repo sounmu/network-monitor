@@ -128,16 +128,8 @@ function HttpMonitorsTab() {
     <div>
       {/* Add Monitor button */}
       <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 16 }}>
-        <button
-          onClick={() => setShowForm((v) => !v)}
-          style={{
-            display: "flex", alignItems: "center", gap: 6, padding: "6px 14px",
-            borderRadius: 8, border: "1px solid var(--accent-blue)",
-            background: "var(--accent-blue)", color: "var(--text-on-accent, #fff)", fontSize: 12,
-            fontWeight: 600, cursor: "pointer",
-          }}
-        >
-          <Plus size={14} /> {t.monitors.addMonitor}
+        <button type="button" onClick={() => setShowForm((v) => !v)} className="md-btn-filled">
+          <Plus size={16} aria-hidden="true" /> {t.monitors.addMonitor}
         </button>
       </div>
 
@@ -177,10 +169,10 @@ function HttpMonitorsTab() {
             </MiniField>
           </div>
           <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-            <button onClick={() => setShowForm(false)} style={{ padding: "6px 14px", borderRadius: 6, border: "1px solid var(--border-subtle)", background: "var(--bg-secondary)", color: "var(--text-secondary)", fontSize: 12, cursor: "pointer" }}>
+            <button type="button" onClick={() => setShowForm(false)} className="md-btn-tonal">
               {t.common.cancel}
             </button>
-            <button onClick={handleCreate} style={{ padding: "6px 14px", borderRadius: 6, border: "1px solid var(--accent-blue)", background: "var(--accent-blue)", color: "var(--text-on-accent, #fff)", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+            <button type="button" onClick={handleCreate} className="md-btn-filled">
               {t.monitors.addMonitor}
             </button>
           </div>
@@ -295,16 +287,8 @@ function PingMonitorsTab() {
     <div>
       {/* Add Monitor button */}
       <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 16 }}>
-        <button
-          onClick={() => setShowForm((v) => !v)}
-          style={{
-            display: "flex", alignItems: "center", gap: 6, padding: "6px 14px",
-            borderRadius: 8, border: "1px solid var(--accent-blue)",
-            background: "var(--accent-blue)", color: "var(--text-on-accent, #fff)", fontSize: 12,
-            fontWeight: 600, cursor: "pointer",
-          }}
-        >
-          <Plus size={14} /> {t.monitors.addMonitor}
+        <button type="button" onClick={() => setShowForm((v) => !v)} className="md-btn-filled">
+          <Plus size={16} aria-hidden="true" /> {t.monitors.addMonitor}
         </button>
       </div>
 
@@ -322,10 +306,10 @@ function PingMonitorsTab() {
             </MiniField>
           </div>
           <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-            <button onClick={() => setShowForm(false)} style={{ padding: "6px 14px", borderRadius: 6, border: "1px solid var(--border-subtle)", background: "var(--bg-secondary)", color: "var(--text-secondary)", fontSize: 12, cursor: "pointer" }}>
+            <button type="button" onClick={() => setShowForm(false)} className="md-btn-tonal">
               {t.common.cancel}
             </button>
-            <button onClick={handleCreate} style={{ padding: "6px 14px", borderRadius: 6, border: "1px solid var(--accent-blue)", background: "var(--accent-blue)", color: "var(--text-on-accent, #fff)", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+            <button type="button" onClick={handleCreate} className="md-btn-filled">
               {t.monitors.addMonitor}
             </button>
           </div>

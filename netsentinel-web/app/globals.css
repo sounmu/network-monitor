@@ -157,9 +157,9 @@
   --md-sys-typescale-display-large:  400 2.5rem/3rem var(--font-inter), -apple-system, BlinkMacSystemFont, sans-serif;
   --md-sys-typescale-display-medium: 400 2rem/2.5rem var(--font-inter), -apple-system, BlinkMacSystemFont, sans-serif;
   --md-sys-typescale-display-small:  400 1.75rem/2.25rem var(--font-inter), -apple-system, BlinkMacSystemFont, sans-serif;
-  --md-sys-typescale-headline-large:  400 1.5rem/2rem var(--font-inter), -apple-system, BlinkMacSystemFont, sans-serif;
-  --md-sys-typescale-headline-medium: 400 1.375rem/1.75rem var(--font-inter), -apple-system, BlinkMacSystemFont, sans-serif;
-  --md-sys-typescale-headline-small:  400 1.25rem/1.625rem var(--font-inter), -apple-system, BlinkMacSystemFont, sans-serif;
+  --md-sys-typescale-headline-large:  700 1.5rem/2rem var(--font-inter), -apple-system, BlinkMacSystemFont, sans-serif;
+  --md-sys-typescale-headline-medium: 700 1.375rem/1.75rem var(--font-inter), -apple-system, BlinkMacSystemFont, sans-serif;
+  --md-sys-typescale-headline-small:  700 1.25rem/1.625rem var(--font-inter), -apple-system, BlinkMacSystemFont, sans-serif;
   --md-sys-typescale-title-large:  500 1.125rem/1.5rem var(--font-inter), -apple-system, BlinkMacSystemFont, sans-serif;
   --md-sys-typescale-title-medium: 500 1rem/1.375rem var(--font-inter), -apple-system, BlinkMacSystemFont, sans-serif;
   --md-sys-typescale-title-small:  500 0.875rem/1.25rem var(--font-inter), -apple-system, BlinkMacSystemFont, sans-serif;
@@ -612,24 +612,15 @@ body {
   padding: 10px 14px;
 }
 
-/* ── Page content ─── */
-.page-content {
-  /* no padding needed — app-layout handles it */
-}
-
-/* ── Shared page header (Material Design 3) ────────
-   Typography per DESIGN.md §2.2:
-     h1         → headline-small  (20px / 400)
-     desc       → body-medium     (14px / 400)
-     chip       → label-small     (11px / 500)
-   Colors: M3 sys tokens only — never raw hex or legacy aliases.
-   Spacing: DESIGN.md §7.1 4px-grid tokens.
-   Shape:   chip uses corner-small per §3.
-   State layer: chip background uses the on-surface 8% state-layer
-                pattern from §5 (`color-mix` with on-surface 8%).
+/* ── Shared page header ────────────────────────────
+   Visually a standard .glass-card (legacy token) so the header blends
+   with every other card in the app. Typography / chip / icon still
+   use the M3 tokens from DESIGN.md §2.2 / §3 / §5 — only the outer
+   surface falls back to the shared card primitive for consistency.
    ─────────────────────────────────────────────── */
 .page-header {
-  margin-bottom: var(--md-sys-spacing-xl);
+  margin-bottom: 20px;
+  padding: 16px 20px;
 }
 .page-header__row {
   display: flex;
@@ -644,14 +635,14 @@ body {
   flex-shrink: 0;
 }
 .page-header__title {
-  font: var(--md-sys-typescale-headline-small);
+  font: var(--md-sys-typescale-headline-medium);
   color: var(--md-sys-color-on-surface);
   margin: 0;
 }
 .page-header__badge {
   display: inline-flex;
   align-items: center;
-  font: var(--md-sys-typescale-label-small);
+  font: var(--md-sys-typescale-label-medium);
   /* Background is an on-surface 8% state layer, so the content itself
      uses `on-surface` (not the variant) to keep WCAG contrast well
      above 4.5:1 and to match the surface-context the state layer was
@@ -721,6 +712,56 @@ body {
   cursor: not-allowed;
 }
 .md-btn-filled:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 2px;
+}
+
+.md-btn-tonal {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--md-sys-spacing-sm);
+  padding: 10px var(--md-sys-spacing-xl);
+  border: none;
+  border-radius: var(--md-sys-shape-corner-full);
+  background: var(--md-sys-color-secondary-container);
+  color: var(--md-sys-color-on-secondary-container);
+  font: var(--md-sys-typescale-label-large);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--md-sys-motion-short3) var(--md-sys-motion-easing-standard);
+}
+.md-btn-tonal:hover:not(:disabled) {
+  background: color-mix(in srgb,
+    var(--md-sys-color-on-secondary-container) 8%,
+    var(--md-sys-color-secondary-container));
+}
+.md-btn-tonal:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.md-btn-tonal:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 2px;
+}
+
+.md-btn-outlined {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--md-sys-spacing-sm);
+  padding: 10px var(--md-sys-spacing-xl);
+  border: 1px solid var(--md-sys-color-outline);
+  border-radius: var(--md-sys-shape-corner-full);
+  background: transparent;
+  color: var(--md-sys-color-primary);
+  font: var(--md-sys-typescale-label-large);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--md-sys-motion-short3) var(--md-sys-motion-easing-standard);
+}
+.md-btn-outlined:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--md-sys-color-primary) 8%, transparent);
+}
+.md-btn-outlined:focus-visible {
   outline: 2px solid var(--md-sys-color-primary);
   outline-offset: 2px;
 }
