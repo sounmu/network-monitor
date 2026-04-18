@@ -7,7 +7,7 @@ import { CheckCheck, X } from "lucide-react";
 import { bulkUpdateHostAlertConfigs, getHostAlertConfigsUrl } from "@/app/lib/api";
 import { useI18n } from "@/app/i18n/I18nContext";
 import type { AlertFormData } from "./shared";
-import { formToRequests } from "./shared";
+import { apiErrorMessage, formToRequests } from "./shared";
 
 interface Props {
   selectedCount: number;
@@ -33,7 +33,7 @@ export function BulkApplyBar({ selectedCount, selectedHosts, form, onClear, onAp
       toast.success(t.alerts.saved);
       onApplied();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : t.alerts.saveFailed);
+      toast.error(apiErrorMessage(e, t));
     } finally {
       setApplying(false);
     }

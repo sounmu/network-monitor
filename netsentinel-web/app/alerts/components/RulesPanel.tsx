@@ -15,7 +15,13 @@ import {
 } from "@/app/lib/api";
 import { HostSummary } from "@/app/types/metrics";
 import { useI18n } from "@/app/i18n/I18nContext";
-import { AlertFormData, configsToForm, formToRequests, type MetricPrefix } from "./shared";
+import {
+  AlertFormData,
+  apiErrorMessage,
+  configsToForm,
+  formToRequests,
+  type MetricPrefix,
+} from "./shared";
 import { MetricRuleCard } from "./MetricRuleCard";
 import { RulesMatrix } from "./RulesMatrix";
 import { BulkApplyBar } from "./BulkApplyBar";
@@ -50,7 +56,7 @@ export function RulesPanel() {
       setSaveMsg(t.alerts.globalSaved);
       setTimeout(() => setSaveMsg(null), 3000);
     } catch (e) {
-      setSaveMsg(e instanceof Error ? e.message : t.alerts.saveFailed);
+      setSaveMsg(apiErrorMessage(e, t));
     } finally {
       setSaving(false);
     }
@@ -72,7 +78,7 @@ export function RulesPanel() {
     setDrawer({ host, metric });
   }, []);
 
-  const saveFailed = saveMsg === t.alerts.saveFailed;
+  const saveMsgIsSuccess = saveMsg === t.alerts.globalSaved;
 
   return (
     <div className="alerts-panel" id="alerts-panel-rules" role="tabpanel" aria-labelledby="alerts-tab-rules">
@@ -105,7 +111,7 @@ export function RulesPanel() {
             role="status"
             aria-live="polite"
             className={`alerts-feedback ${
-              saveFailed ? "alerts-feedback--error" : "alerts-feedback--success"
+              saveMsgIsSuccess ? "alerts-feedback--success" : "alerts-feedback--error"
             }`}
           >
             {saveMsg}
@@ -203,7 +209,7 @@ function HostAlertOverride({
       setMsg(t.alerts.saved);
       setTimeout(() => setMsg(null), 3000);
     } catch (e) {
-      setMsg(e instanceof Error ? e.message : t.alerts.saveFailed);
+      setMsg(apiErrorMessage(e, t));
     } finally {
       setSaving(false);
     }
@@ -229,7 +235,7 @@ function HostAlertOverride({
     }
   };
 
-  const msgFailed = msg === t.alerts.saveFailed;
+  const msgIsSuccess = msg === t.alerts.saved || msg === t.alerts.revertedToGlobal;
 
   return (
     <div className="glass-card" style={{ overflow: "hidden", marginBottom: 8 }}>
@@ -272,7 +278,7 @@ function HostAlertOverride({
               role="status"
               aria-live="polite"
               className={`alerts-feedback alerts-feedback--inline ${
-                msgFailed ? "alerts-feedback--error" : "alerts-feedback--success"
+                msgIsSuccess ? "alerts-feedback--success" : "alerts-feedback--error"
               }`}
             >
               {msg}

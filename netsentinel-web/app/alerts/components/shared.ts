@@ -1,4 +1,6 @@
+import { ApiError } from "@/app/lib/api";
 import type { AlertConfigRow, UpsertAlertRequest } from "@/app/lib/api";
+import type { Translations } from "@/app/i18n/translations";
 
 export type MetricPrefix = "cpu" | "memory" | "disk";
 
@@ -69,6 +71,21 @@ export function alertTypeEmoji(alertType: string): string {
 
 export function sanitizeMarkdown(msg: string): string {
   return msg.replace(/\*\*/g, "").replace(/`/g, "");
+}
+
+/**
+ * Extracts a user-friendly toast message from an error thrown by the API
+ * client. Recognizes 429 specifically so callers can show the translated
+ * rate-limit notice without every handler duplicating the branch.
+ */
+export function apiErrorMessage(error: unknown, t: Translations, fallback?: string): string {
+  if (error instanceof ApiError && error.status === 429) {
+    return t.alerts.tooManyRequests;
+  }
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+  return fallback ?? t.alerts.saveFailed;
 }
 
 export function formatRelative(iso: string, locale: "en" | "ko", now: number): string {

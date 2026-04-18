@@ -15,7 +15,7 @@ import {
 import { useI18n } from "@/app/i18n/I18nContext";
 import type { HostSummary } from "@/app/types/metrics";
 import type { AlertFormData, MetricPrefix } from "./shared";
-import { configsToForm, formToRequests } from "./shared";
+import { apiErrorMessage, configsToForm, formToRequests } from "./shared";
 import { MetricRuleCard } from "./MetricRuleCard";
 
 interface Props {
@@ -73,7 +73,7 @@ export function RuleDrawer({ host, metric, onClose }: Props) {
       toast.success(t.alerts.saved);
       onClose();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : t.alerts.saveFailed);
+      toast.error(apiErrorMessage(e, t));
     } finally {
       setSaving(false);
     }
@@ -88,7 +88,7 @@ export function RuleDrawer({ host, metric, onClose }: Props) {
       toast.success(t.alerts.revertedToGlobal);
       onClose();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : t.alerts.saveFailed);
+      toast.error(apiErrorMessage(e, t));
     } finally {
       setSaving(false);
     }

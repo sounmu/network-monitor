@@ -14,6 +14,7 @@ import {
   testNotificationChannel,
 } from "@/app/lib/api";
 import { useI18n } from "@/app/i18n/I18nContext";
+import { apiErrorMessage } from "./shared";
 
 interface Props {
   onCountChange?: (count: number | null) => void;
@@ -50,7 +51,7 @@ export function ChannelsPanel({ onCountChange }: Props) {
       setFormConfig({});
       await mutate();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : t.notifications.testFailed);
+      toast.error(apiErrorMessage(e, t, t.notifications.testFailed));
     }
   };
 
@@ -59,21 +60,25 @@ export function ChannelsPanel({ onCountChange }: Props) {
       await deleteNotificationChannel(id);
       await mutate();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : t.notifications.testFailed);
+      toast.error(apiErrorMessage(e, t, t.notifications.testFailed));
     }
   };
 
   const handleToggle = async (ch: NotificationChannel) => {
-    await updateNotificationChannel(ch.id, { enabled: !ch.enabled });
-    await mutate();
+    try {
+      await updateNotificationChannel(ch.id, { enabled: !ch.enabled });
+      await mutate();
+    } catch (e) {
+      toast.error(apiErrorMessage(e, t));
+    }
   };
 
   const handleTest = async (id: number) => {
     try {
       await testNotificationChannel(id);
       setTestMsg((prev) => ({ ...prev, [id]: t.notifications.testSuccess }));
-    } catch {
-      setTestMsg((prev) => ({ ...prev, [id]: t.notifications.testFailed }));
+    } catch (e) {
+      setTestMsg((prev) => ({ ...prev, [id]: apiErrorMessage(e, t, t.notifications.testFailed) }));
     }
     setTimeout(() => {
       setTestMsg((prev) => {
