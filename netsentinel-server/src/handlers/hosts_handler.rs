@@ -8,6 +8,7 @@ use crate::models::app_state::AppState;
 use crate::repositories::hosts_repo::{self, CreateHostRequest, HostRow, UpdateHostRequest};
 use crate::services::auth::{AdminGuard, UserGuard};
 use crate::services::hosts_snapshot;
+use url::Host;
 
 // ── Validation limits ────────────────────────
 const MAX_KEY_LEN: usize = 255;
@@ -45,6 +46,14 @@ fn validate_host_key_format(host_key: &str) -> Result<(), AppError> {
                 "host_key port must be a valid number (1-65535)".to_string(),
             ));
         }
+        if host.contains(':') {
+            return Err(AppError::BadRequest(
+                "host_key host must be a hostname or bracketed IPv6 literal".to_string(),
+            ));
+        }
+        Host::parse(host).map_err(|_| {
+            AppError::BadRequest("host_key host part is not a valid hostname".to_string())
+        })?;
     }
     Ok(())
 }
@@ -57,6 +66,15 @@ fn validate_ports(ports: &[i32]) -> Result<(), AppError> {
                 p
             )));
         }
+    }
+    Ok(())
+}
+
+fn validate_scrape_interval(scrape_interval_secs: i32) -> Result<(), AppError> {
+    if scrape_interval_secs <= 0 {
+        return Err(AppError::BadRequest(
+            "scrape_interval_secs must be greater than 0".to_string(),
+        ));
     }
     Ok(())
 }
@@ -94,6 +112,7 @@ pub async fn create_host(
             MAX_NAME_LEN
         )));
     }
+    validate_scrape_interval(body.scrape_interval_secs)?;
     validate_ports(&body.ports)?;
 
     let host = hosts_repo::create_host(&state.db_pool, &body)
@@ -143,6 +162,9 @@ pub async fn update_host(
             MAX_NAME_LEN
         )));
     }
+    if let Some(scrape_interval_secs) = body.scrape_interval_secs {
+        validate_scrape_interval(scrape_interval_secs)?;
+    }
     if let Some(ref ports) = body.ports {
         validate_ports(ports)?;
     }
@@ -150,6 +172,21 @@ pub async fn update_host(
     let host = hosts_repo::update_host(&state.db_pool, &host_key, &body)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("Host not found: {}", host_key)))?;
+
+    if let Ok(mut lks) = state.last_known_status.write()
+        && let Some(status) = lks.get_mut(&host.host_key)
+    {
+        status.display_name = host.display_name.clone();
+        status.scrape_interval_secs = u64::try_from(host.scrape_interval_secs)
+            .ok()
+            .filter(|secs| *secs > 0)
+            .unwrap_or(state.scrape_interval_secs);
+        status.os_info = host.os_info.clone();
+        status.cpu_model = host.cpu_model.clone();
+        status.memory_total_mb = host.memory_total_mb;
+        status.boot_time = host.boot_time;
+        status.ip_address = host.ip_address.clone();
+    }
 
     hosts_snapshot::refresh(&state.db_pool, &state.hosts_snapshot).await;
 

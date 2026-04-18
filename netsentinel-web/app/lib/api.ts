@@ -249,23 +249,34 @@ export const deleteHost = async (hostKey: string): Promise<void> => {
 
 // ── Alert Config CRUD ──
 
+export type MetricType =
+  | "cpu"
+  | "memory"
+  | "disk"
+  | "load"
+  | "network"
+  | "temperature"
+  | "gpu";
+
 export interface AlertConfigRow {
   id: number;
   host_key: string | null;
-  metric_type: "cpu" | "memory" | "disk";
+  metric_type: MetricType;
   enabled: boolean;
   threshold: number;
   sustained_secs: number;
   cooldown_secs: number;
   updated_at: string;
+  sub_key?: string | null;
 }
 
 export interface UpsertAlertRequest {
-  metric_type: "cpu" | "memory" | "disk";
+  metric_type: MetricType;
   enabled: boolean;
   threshold: number;
   sustained_secs: number;
   cooldown_secs: number;
+  sub_key?: string | null;
 }
 
 export const getAlertConfigsUrl = () => `${API_BASE}/api/alert-configs`;
@@ -280,6 +291,14 @@ export const updateHostAlertConfigs = (hostKey: string, body: UpsertAlertRequest
 
 export const deleteHostAlertConfigs = (hostKey: string) =>
   apiCall<unknown>(`${API_BASE}/api/alert-configs/${encodeURIComponent(hostKey)}`, "DELETE");
+
+export interface BulkAlertConfigRequest {
+  host_keys: string[];
+  configs: UpsertAlertRequest[];
+}
+
+export const bulkUpdateHostAlertConfigs = (body: BulkAlertConfigRequest) =>
+  apiCall<AlertConfigRow[]>(`${API_BASE}/api/alert-configs/bulk`, "POST", body);
 
 // ── Notification Channels CRUD ──
 
@@ -317,12 +336,32 @@ export interface AlertHistoryRow {
   created_at: string;
 }
 
-export const getAlertHistoryUrl = (hostKey?: string, limit = 50) => {
+export interface AlertHistoryPage {
+  rows: AlertHistoryRow[];
+  total: number;
+}
+
+export interface AlertHistoryFilters {
+  host_key?: string;
+  type?: string;
+  from?: string;
+  to?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export const getAlertHistoryUrl = (filters: AlertHistoryFilters = {}) => {
   const params = new URLSearchParams();
-  if (hostKey) params.set("host_key", hostKey);
-  params.set("limit", String(limit));
+  if (filters.host_key) params.set("host_key", filters.host_key);
+  if (filters.type) params.set("type", filters.type);
+  if (filters.from) params.set("from", filters.from);
+  if (filters.to) params.set("to", filters.to);
+  params.set("limit", String(filters.limit ?? 50));
+  if (filters.offset) params.set("offset", String(filters.offset));
   return `${API_BASE}/api/alert-history?${params.toString()}`;
 };
+
+export const getActiveAlertsUrl = () => `${API_BASE}/api/alerts/active`;
 
 // ── Uptime ──
 

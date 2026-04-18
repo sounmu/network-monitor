@@ -38,9 +38,9 @@ graph LR
 ```
 
 **Data flow:**
-1. Server scrapes each registered agent every 10 s (configurable), batch-inserts metrics in a single query
+1. Server schedules each registered agent by that host's `scrape_interval_secs` (10 s by default), batch-inserts metrics in a single query
 2. Metrics stored in TimescaleDB hypertable (90-day retention) + 5-min continuous aggregate for fast long-range queries
-3. Browser connects to SSE stream for real-time updates (10 s push, in-memory — no DB hit, rAF-batched). SSE `metrics` event includes CPU, memory, load, network, disks, temperatures, and Docker stats for live chart overlay
+3. Browser connects to SSE stream for real-time updates (in-memory — no DB hit, rAF-batched). SSE `metrics` event includes CPU, memory, load, network, disks, temperatures, and Docker stats for live chart overlay; long-lived streams are cut when the session is revoked
 4. REST API with automatic downsampling: ≤6h raw, 6h-3d 1-min, 3d-14d 5-min (CA), >14d 15-min (CA)
 5. Alerts delivered to Discord, Slack, and/or Email channels
 
@@ -151,12 +151,14 @@ cargo run
 | `ALLOWED_ORIGINS` | No | `http://localhost:3001` | Comma-separated CORS origins. Must include (1) the site hosting the dashboard, (2) `NEXT_PUBLIC_API_URL` itself. Origins are byte-matched — no trailing slash, no wildcards (`*` is incompatible with `credentials: "include"`). |
 | `SERVER_HOST` | No | `0.0.0.0` | Bind address |
 | `SERVER_PORT` | No | `3000` | Bind port |
-| `SCRAPE_INTERVAL_SECS` | No | `10` | How often to pull each agent |
+| `SCRAPE_INTERVAL_SECS` | No | `10` | Fallback scrape interval if a host row has no valid `scrape_interval_secs`; normal scheduling is per-host |
 | `MAX_DB_CONNECTIONS` | No | `10` | PostgreSQL pool size |
 | `SSE_BUFFER_SIZE` | No | `128` | SSE broadcast channel buffer |
 | `TRUSTED_PROXY_COUNT` | No | `0` | Reverse proxy count for X-Forwarded-For (0 = use peer IP directly) |
 | `METRICS_CACHE_MAX_ENTRIES` | No | `200` | Max in-memory query-cache entries (oldest-inserted evicted when full; TTL 120 s) |
-| `METRICS_TOKEN` | No | — | Bearer token required to scrape `/metrics` (Prometheus). Unset = open endpoint (firewall at reverse proxy). Set = `Authorization: Bearer <token>` required. Generate with `openssl rand -hex 32`. |
+| `COOKIE_SECURE` | No | `true` | Whether the refresh cookie carries the `Secure` flag. Leave enabled in production; set `false` only for local plain-HTTP development. |
+| `METRICS_TOKEN` | No | — | Bearer token for `/metrics` (Prometheus). When set, every scrape must send `Authorization: Bearer <token>`. |
+| `ALLOW_UNAUTHENTICATED_METRICS` | No | `false` | Explicit opt-in to leave `/metrics` open when `METRICS_TOKEN` is unset. |
 
 ### Agent `netsentinel-agent/.env`
 
@@ -215,7 +217,7 @@ All endpoints require `Authorization: Bearer <JWT>` unless noted. Read endpoints
 | `DELETE` | `/api/ping-monitors/{id}` | Delete Ping monitor |
 | `GET` | `/api/ping-monitors/{id}/results` | Ping check results |
 | `GET` | `/api/public/status` | Public status page data **(no auth)** |
-| `GET` | `/metrics` | Prometheus metrics export (**auth optional** — set `METRICS_TOKEN` to require `Bearer`) |
+| `GET` | `/metrics` | Prometheus metrics export (**auth required by default** — set `METRICS_TOKEN`, or explicitly opt in via `ALLOW_UNAUTHENTICATED_METRICS=true`) |
 | `POST` | `/api/auth/logout` | Revoke all tokens for current user |
 | `POST` | `/api/auth/refresh` | Rotate refresh cookie + mint fresh access JWT (cookie is the credential; no auth header) |
 | `POST` | `/api/auth/sse-ticket` | Mint single-use ticket for SSE |

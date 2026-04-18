@@ -33,10 +33,11 @@ const TICKET_TTL: Duration = Duration::from_secs(60);
 /// Size of the random ticket body in bytes (256 bits).
 const TICKET_BYTES: usize = 32;
 
-#[derive(Clone, Copy)]
-struct TicketEntry {
-    user_id: i32,
-    expires_at: Instant,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TicketEntry {
+    pub user_id: i32,
+    pub issued_at: usize,
+    pub expires_at: Instant,
 }
 
 /// Thread-safe store of live SSE tickets.
@@ -53,13 +54,14 @@ impl SseTicketStore {
 
     /// Mint a new ticket for `user_id` and return its opaque string form.
     /// The returned value is what the client passes back to `/api/stream?key=`.
-    pub fn issue(&self, user_id: i32) -> String {
+    pub fn issue(&self, user_id: i32, issued_at: usize) -> String {
         let mut raw = [0u8; TICKET_BYTES];
         OsRng.fill_bytes(&mut raw);
         let token = URL_SAFE_NO_PAD.encode(raw);
 
         let entry = TicketEntry {
             user_id,
+            issued_at,
             expires_at: Instant::now() + TICKET_TTL,
         };
 
@@ -73,11 +75,11 @@ impl SseTicketStore {
         token
     }
 
-    /// Atomically look up and remove a ticket, returning the issuing `user_id`
+    /// Atomically look up and remove a ticket, returning the issuing session context
     /// on success. Returns `None` for unknown, expired, or already-consumed
     /// tickets — the caller cannot distinguish those cases, which is deliberate
     /// (no oracle for enumeration).
-    pub fn consume(&self, presented: &str) -> Option<i32> {
+    pub fn consume(&self, presented: &str) -> Option<TicketEntry> {
         if presented.is_empty() {
             return None;
         }
@@ -91,7 +93,7 @@ impl SseTicketStore {
             // which is exactly what we want (lazy eviction on access).
             return None;
         }
-        Some(entry.user_id)
+        Some(entry)
     }
 
     /// Drop every entry whose TTL has elapsed. Called from a background task;
@@ -119,7 +121,7 @@ mod tests {
     #[test]
     fn test_issue_returns_base64url_without_padding() {
         let store = SseTicketStore::new();
-        let token = store.issue(1);
+        let token = store.issue(1, 123);
         assert!(!token.is_empty());
         assert!(
             !token.contains('='),
@@ -134,16 +136,17 @@ mod tests {
     #[test]
     fn test_issue_produces_unique_tickets() {
         let store = SseTicketStore::new();
-        let a = store.issue(1);
-        let b = store.issue(1);
+        let a = store.issue(1, 123);
+        let b = store.issue(1, 123);
         assert_ne!(a, b, "Two issues should never collide at 256-bit entropy");
     }
 
     #[test]
     fn test_consume_returns_user_id_once_only() {
         let store = SseTicketStore::new();
-        let token = store.issue(42);
-        assert_eq!(store.consume(&token), Some(42));
+        let token = store.issue(42, 123);
+        let consumed = store.consume(&token).expect("ticket should exist");
+        assert_eq!(consumed.user_id, 42);
         assert_eq!(
             store.consume(&token),
             None,
@@ -169,6 +172,7 @@ mod tests {
                 token.clone(),
                 TicketEntry {
                     user_id: 7,
+                    issued_at: 123,
                     expires_at: Instant::now() - Duration::from_secs(1),
                 },
             );
@@ -179,19 +183,23 @@ mod tests {
     #[test]
     fn test_evict_expired_removes_only_stale_entries() {
         let store = SseTicketStore::new();
-        let live_token = store.issue(1);
+        let live_token = store.issue(1, 123);
         {
             let mut tickets = store.tickets.write().unwrap();
             tickets.insert(
                 "stale".to_string(),
                 TicketEntry {
                     user_id: 2,
+                    issued_at: 456,
                     expires_at: Instant::now() - Duration::from_secs(1),
                 },
             );
         }
         store.evict_expired();
-        assert_eq!(store.consume(&live_token), Some(1));
+        let consumed = store
+            .consume(&live_token)
+            .expect("live ticket should exist");
+        assert_eq!(consumed.user_id, 1);
         assert_eq!(store.consume("stale"), None);
     }
 }

@@ -11,6 +11,7 @@ import {
   saveDashboard,
   fetcher,
   AlertHistoryRow,
+  AlertHistoryPage,
   getAlertHistoryUrl,
 } from "@/app/lib/api";
 
@@ -20,10 +21,11 @@ export default function DashboardWidgets() {
   const { data: savedWidgets, mutate } = useSWR<DashboardWidget[]>(
     getDashboardUrl(), fetcher, { revalidateOnFocus: false }
   );
-  const { data: alerts } = useSWR<AlertHistoryRow[]>(
-    getAlertHistoryUrl(undefined, 10), fetcher,
+  const { data: alertsPage } = useSWR<AlertHistoryPage>(
+    getAlertHistoryUrl({ limit: 10 }), fetcher,
     { refreshInterval: 30000, revalidateOnFocus: false }
   );
+  const alerts = alertsPage?.rows;
 
   const [widgets, setWidgets] = useState<DashboardWidget[]>([]);
   const [editing, setEditing] = useState(false);

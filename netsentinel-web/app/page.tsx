@@ -1,38 +1,38 @@
 "use client";
 
+import Link from "next/link";
 import { useSSE } from "@/app/lib/sse-context";
 import {
   getHostStatus,
   STATUS_DOT_CLASS,
   HostStatus,
 } from "@/app/lib/status";
-import { useRouter } from "next/navigation";
 import React, { useMemo } from "react";
 import { useI18n } from "@/app/i18n/I18nContext";
-import { Activity } from "lucide-react";
+import { Activity, LayoutDashboard } from "lucide-react";
 import { formatNetworkSpeed } from "@/app/lib/formatters";
+import { PageHeader } from "@/app/components/PageHeader";
 
-/** Each metric column has a fixed "personal color" */
-const METRIC_COLORS = {
-  cpu: "var(--accent-blue)",
-  memory: "var(--accent-purple)",
-  disk: "var(--accent-yellow)",
-  load: "var(--accent-cyan)",
-  rx: "var(--accent-green)",
-  tx: "hsl(210, 70%, 55%)",
-} as const;
+/**
+ * Column-header labels stay in the primary on-surface color for a clean
+ * scannable grid. Metric values + their inline-meter bars share the
+ * accent-green fill so a glance tells you "running" without the rainbow
+ * of per-metric hues the overview previously used.
+ */
+const HEADER_COLOR = "var(--text-primary)";
+const METRIC_VALUE_COLOR = "var(--accent-green)";
 
-function InlineMeter({ value, color, max = 100 }: { value: number; color: string; max?: number }) {
+function InlineMeter({ value, max = 100 }: { value: number; max?: number }) {
   const pct = Math.min(Math.max((value / max) * 100, 0), 100);
   return (
     <div className="inline-meter">
-      <span className="inline-meter-value" style={{ color }}>
+      <span className="inline-meter-value" style={{ color: METRIC_VALUE_COLOR }}>
         {pct.toFixed(1)}%
       </span>
       <span className="inline-meter-bar">
         <span
           className="inline-meter-fill"
-          style={{ width: `${pct}%`, background: color }}
+          style={{ width: `${pct}%`, background: METRIC_VALUE_COLOR }}
         />
       </span>
     </div>
@@ -54,7 +54,6 @@ interface HostRow {
 }
 
 export default function HomePage() {
-  const router = useRouter();
   const { metricsMap, statusMap, isConnected } = useSSE();
   const { t } = useI18n();
 
@@ -63,7 +62,7 @@ export default function HomePage() {
       const metrics = metricsMap[status.host_key];
       const lastSeen = metrics?.timestamp ?? status.last_seen ?? null;
       const isOnline = metrics?.is_online ?? status.is_online ?? false;
-      const hostStatus = getHostStatus(lastSeen, isOnline);
+      const hostStatus = getHostStatus(lastSeen, isOnline, status.scrape_interval_secs);
 
       // Root disk usage: pick "/" mount or highest usage partition
       const disks = status.disks ?? [];
@@ -107,52 +106,32 @@ export default function HomePage() {
   const isLoading = !isConnected && hosts.length === 0;
 
   return (
-    <div className="fade-in">
-      <div className="glass-card" style={{ overflow: "hidden" }}>
-        {/* Table header bar */}
-        <div
-          style={{
-            padding: "14px 20px",
-            borderBottom: "1px solid var(--border-subtle)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            gap: 12,
-          }}
-        >
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <h1 style={{ fontSize: 16, fontWeight: 700, color: "var(--text-primary)" }}>
-              {t.overview.title}
-            </h1>
-            <span
-              style={{
-                fontSize: 11,
-                color: "var(--text-muted)",
-                background: "var(--bg-muted)",
-                padding: "2px 8px",
-                borderRadius: 6,
-                fontWeight: 500,
-              }}
-            >
-              {hosts.length}
-            </span>
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 12, fontSize: 12, color: "var(--text-muted)" }}>
-            {onlineCount > 0 && (
-              <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                <span className="pulse-dot green" style={{ width: 6, height: 6 }} />
-                {onlineCount} {t.overview.online}
-              </span>
-            )}
-            {offlineCount > 0 && (
-              <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                <span className="pulse-dot red" style={{ width: 6, height: 6 }} />
-                {offlineCount} {t.overview.offline}
-              </span>
-            )}
-          </div>
-        </div>
+    <div className="page-content fade-in">
+      <PageHeader
+        icon={<LayoutDashboard size={18} aria-hidden="true" />}
+        title={t.overview.title}
+        badge={hosts.length}
+        right={
+          (onlineCount > 0 || offlineCount > 0) ? (
+            <div className="page-header__stats">
+              {onlineCount > 0 && (
+                <span className="page-header__stats-item">
+                  <span className="pulse-dot green" style={{ width: 6, height: 6 }} />
+                  {onlineCount} {t.overview.online}
+                </span>
+              )}
+              {offlineCount > 0 && (
+                <span className="page-header__stats-item">
+                  <span className="pulse-dot red" style={{ width: 6, height: 6 }} />
+                  {offlineCount} {t.overview.offline}
+                </span>
+              )}
+            </div>
+          ) : undefined
+        }
+      />
 
+      <div className="glass-card" style={{ overflow: "hidden" }}>
         {isLoading && (
           <div style={{ padding: 20 }}>
             {[1, 2, 3].map((i) => (
@@ -185,23 +164,23 @@ export default function HomePage() {
               <thead>
                 <tr>
                   <th>{t.overview.tableHeaders.system}</th>
-                  <th style={{ width: "13%" }}>
-                    <span style={{ color: METRIC_COLORS.cpu }}>{t.overview.tableHeaders.cpu}</span>
+                  <th style={{ width: "14%" }}>
+                    <span style={{ color: HEADER_COLOR }}>{t.overview.tableHeaders.cpu}</span>
                   </th>
-                  <th style={{ width: "13%" }}>
-                    <span style={{ color: METRIC_COLORS.memory }}>{t.overview.tableHeaders.memory}</span>
+                  <th style={{ width: "14%" }}>
+                    <span style={{ color: HEADER_COLOR }}>{t.overview.tableHeaders.memory}</span>
                   </th>
-                  <th style={{ width: "13%" }}>
-                    <span style={{ color: METRIC_COLORS.disk }}>{t.overview.tableHeaders.disk}</span>
+                  <th style={{ width: "14%" }}>
+                    <span style={{ color: HEADER_COLOR }}>{t.overview.tableHeaders.disk}</span>
                   </th>
-                  <th style={{ width: "8%" }}>
-                    <span style={{ color: METRIC_COLORS.load }}>{t.overview.tableHeaders.load}</span>
+                  <th style={{ width: "9%" }}>
+                    <span style={{ color: HEADER_COLOR }}>{t.overview.tableHeaders.load}</span>
                   </th>
-                  <th style={{ width: "10%" }}>
-                    <span style={{ color: METRIC_COLORS.rx }}>{t.overview.tableHeaders.netRx}</span>
+                  <th style={{ width: "11%" }}>
+                    <span style={{ color: HEADER_COLOR }}>{t.overview.tableHeaders.netRx}</span>
                   </th>
-                  <th style={{ width: "10%" }}>
-                    <span style={{ color: METRIC_COLORS.tx }}>{t.overview.tableHeaders.netTx}</span>
+                  <th style={{ width: "11%" }}>
+                    <span style={{ color: HEADER_COLOR }}>{t.overview.tableHeaders.netTx}</span>
                   </th>
                 </tr>
               </thead>
@@ -212,11 +191,6 @@ export default function HomePage() {
                   return (
                     <tr
                       key={host.host_key}
-                      tabIndex={0}
-                      role="link"
-                      onClick={() => router.push(`/host/${encodeURIComponent(host.host_key)}`)}
-                      onKeyDown={(e) => { if (e.key === "Enter") router.push(`/host/${encodeURIComponent(host.host_key)}`); }}
-                      style={{ cursor: "pointer" }}
                     >
                       <td>
                         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -235,7 +209,12 @@ export default function HomePage() {
                                 textOverflow: "ellipsis",
                               }}
                             >
-                              {host.display_name}
+                              <Link
+                                href={`/host/${encodeURIComponent(host.host_key)}`}
+                                style={{ color: "inherit", textDecoration: "none" }}
+                              >
+                                {host.display_name}
+                              </Link>
                             </div>
                             {host.display_name !== host.host_key && (
                               <div
@@ -254,17 +233,17 @@ export default function HomePage() {
                           </div>
                         </div>
                       </td>
-                      <td>{offline ? dash : <InlineMeter value={host.cpu} color={METRIC_COLORS.cpu} />}</td>
-                      <td>{offline ? dash : <InlineMeter value={host.ram} color={METRIC_COLORS.memory} />}</td>
-                      <td>{offline ? dash : <InlineMeter value={host.disk} color={METRIC_COLORS.disk} />}</td>
+                      <td>{offline ? dash : <InlineMeter value={host.cpu} />}</td>
+                      <td>{offline ? dash : <InlineMeter value={host.ram} />}</td>
+                      <td>{offline ? dash : <InlineMeter value={host.disk} />}</td>
                       <td>
                         {offline ? dash : (
                           <span
                             style={{
                               fontSize: 12,
                               fontFamily: "var(--font-mono), monospace",
-                              fontWeight: 500,
-                              color: METRIC_COLORS.load,
+                              fontWeight: 600,
+                              color: METRIC_VALUE_COLOR,
                             }}
                           >
                             {host.load.toFixed(2)}
@@ -277,8 +256,8 @@ export default function HomePage() {
                             style={{
                               fontSize: 12,
                               fontFamily: "var(--font-mono), monospace",
-                              color: METRIC_COLORS.rx,
-                              fontWeight: 500,
+                              color: METRIC_VALUE_COLOR,
+                              fontWeight: 600,
                             }}
                           >
                             {formatNetworkSpeed(host.networkRx)}
@@ -291,8 +270,8 @@ export default function HomePage() {
                             style={{
                               fontSize: 12,
                               fontFamily: "var(--font-mono), monospace",
-                              color: METRIC_COLORS.tx,
-                              fontWeight: 500,
+                              color: METRIC_VALUE_COLOR,
+                              fontWeight: 600,
                             }}
                           >
                             {formatNetworkSpeed(host.networkTx)}

@@ -12,6 +12,7 @@ import { HostSummary } from "@/app/types/metrics";
 import { useI18n } from "@/app/i18n/I18nContext";
 import { useSSE } from "@/app/lib/sse-context";
 import { toast } from "sonner";
+import { PageHeader } from "@/app/components/PageHeader";
 
 /** Host form data */
 interface HostFormData {
@@ -135,25 +136,18 @@ export default function AgentsPage() {
 
   return (
     <div className="page-content fade-in">
-      {/* Header */}
-      <div style={{ marginBottom: 28 }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <Settings size={20} color="var(--accent-blue)" />
-            <h1 style={{ fontSize: 22, fontWeight: 800, color: "var(--text-primary)", letterSpacing: "-0.3px" }}>
-              {t.agents.title}
-            </h1>
-          </div>
-          {editingKey === null && (
-            <button onClick={openAdd} style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 16px", borderRadius: 8, border: "1px solid var(--accent-blue)", background: "var(--accent-blue)", color: "var(--text-on-accent, #fff)", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
-              <Plus size={14} /> {t.agents.addAgent}
+      <PageHeader
+        icon={<Settings size={18} aria-hidden="true" />}
+        title={t.agents.title}
+        description={t.agents.description}
+        right={
+          editingKey === null ? (
+            <button type="button" onClick={openAdd} className="md-btn-filled">
+              <Plus size={16} aria-hidden="true" /> {t.agents.addAgent}
             </button>
-          )}
-        </div>
-        <p style={{ color: "var(--text-muted)", fontSize: 13 }}>
-          {t.agents.description}
-        </p>
-      </div>
+          ) : undefined
+        }
+      />
 
       {/* Add/Edit form */}
       {editingKey !== null && (

@@ -81,6 +81,8 @@ cargo fmt                     # auto-format
 cargo test                    # run unit tests
 ```
 
+When testing auth locally over plain HTTP, set `COOKIE_SECURE=false` in `netsentinel-server/.env`; production should keep the default secure cookie. Prometheus scraping is auth-required by default, so set `METRICS_TOKEN` (recommended) or explicitly opt in to anonymous scraping with `ALLOW_UNAUTHENTICATED_METRICS=true`.
+
 ### Agent (Rust)
 
 ```bash
@@ -123,11 +125,12 @@ npm run build    # production build
 - Use the existing `useI18n()` hook (`app/i18n/I18nContext.tsx`) for any UI strings — do not hardcode visible text.
 - Follow the established file structure: pages in `app/`, reusable components in `app/components/`.
 - Inline styles are acceptable for now; prefer CSS variables defined in `globals.css` for colours and spacing.
+- Do not cache App Router documents or RSC payloads in the service worker; only immutable static assets belong there.
 
 ### Git
 
 - Branch naming: `feat/<short-description>`, `fix/<short-description>`, `docs/<short-description>`.
-- Commit messages: imperative mood, 72-char subject line, blank line before body.
+- Commit messages: use a lowercase type prefix such as `fix:`, `feat:`, `docs:`, `refactor:`, or `test:` followed by an imperative summary; keep the subject line within 72 characters and leave a blank line before the body when needed.
 - One logical change per commit.
 
 ---
@@ -141,7 +144,7 @@ cd netsentinel-server
 cargo test
 ```
 
-Existing tests cover JWT generation/validation, alert-threshold logic, password validation, rate limiting, refresh-token rotation, SSE tickets, request ID generation, and input validation. There are 178 tests total across the project: server (96), agent (33), web (49).
+Existing tests cover JWT generation/validation, alert-threshold logic, password validation, rate limiting, refresh-token rotation, SSE tickets, request ID generation, and input validation. There are 190 tests total across the project: server (107), agent (33), web (50).
 
 ### Database migrations
 
@@ -238,6 +241,7 @@ sudo systemctl restart netsentinel-agent   # or launchctl on macOS
 4. A maintainer will review within a few days. Feedback may be requested before merging.
 
 > **Breaking changes**: If your PR modifies the SSE payload schema or REST API contracts, note it clearly in the PR description so consumers can prepare.
+> Update `README.md`, `AGENTS.md`, `CONTRIBUTING.md`, and any relevant `.env.example` files whenever config defaults, auth behavior, or API/SSE contracts change.
 
 ---
 

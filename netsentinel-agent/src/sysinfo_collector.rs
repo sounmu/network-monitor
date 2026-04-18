@@ -59,9 +59,26 @@ static COMPS: LazyLock<Mutex<Components>> =
 static COLLECT_GATE: LazyLock<tokio::sync::Mutex<()>> =
     LazyLock::new(|| tokio::sync::Mutex::new(()));
 
-/// Compute per-disk read/write bytes per second using sysinfo's cumulative counters.
-/// Cross-platform: works on Linux, macOS, and Windows via `Disk::usage()`.
-fn compute_disk_io(dev_name: &str, usage: &DiskUsage) -> (f64, f64) {
+/// Compute per-partition read/write bytes per second using sysinfo's
+/// cumulative counters.
+///
+/// The cache is keyed by the **raw partition name** (`/dev/sda1`,
+/// `/dev/nvme0n1p2`, etc.) — each partition carries an independent
+/// `/proc/diskstats` counter on Linux and its own cumulative usage on
+/// macOS/Windows, so collapsing partitions to a base block device (as an
+/// earlier version did) destroyed the temporal baseline:
+///
+/// 1. First partition iter inserts current bytes under key `"sda"` with
+///    `Instant::now()`.
+/// 2. A few μs later the next partition on the same device hits the same
+///    key, reads `elapsed ≈ 10 μs`, subtracts the first partition's
+///    counter from this partition's counter, and divides by the tiny
+///    elapsed → rates in the 100 GB/s–TB/s range for ordinary desktop I/O.
+///
+/// Per-partition rates are what `DiskInfo { name, mount_point, … }`
+/// downstream wants anyway (one row per mount in the UI), so there is no
+/// value in aggregating here.
+fn compute_disk_io(dev_key: &str, usage: &DiskUsage) -> (f64, f64) {
     let read_bytes = usage.total_read_bytes;
     let write_bytes = usage.total_written_bytes;
     let now = Instant::now();
@@ -71,9 +88,17 @@ fn compute_disk_io(dev_name: &str, usage: &DiskUsage) -> (f64, f64) {
         e.into_inner()
     });
 
-    let result = if let Some((prev_r, prev_w, prev_t)) = prev_map.get(dev_name) {
+    // Minimum elapsed floor — sysinfo on some platforms can return cached
+    // counter values that cause back-to-back reads to produce a sub-
+    // millisecond elapsed. Even with the correct per-partition keying
+    // above, any future bug that collapses keys would re-introduce the
+    // division-by-microsecond hazard; a 500 ms floor caps worst-case rate
+    // at 2× the real value in that degenerate case instead of 1000×+.
+    const MIN_ELAPSED_SECS: f64 = 0.5;
+
+    let result = if let Some((prev_r, prev_w, prev_t)) = prev_map.get(dev_key) {
         let elapsed = now.duration_since(*prev_t).as_secs_f64();
-        if elapsed > 0.0 {
+        if elapsed >= MIN_ELAPSED_SECS {
             (
                 read_bytes.saturating_sub(*prev_r) as f64 / elapsed,
                 write_bytes.saturating_sub(*prev_w) as f64 / elapsed,
@@ -85,42 +110,20 @@ fn compute_disk_io(dev_name: &str, usage: &DiskUsage) -> (f64, f64) {
         (0.0, 0.0)
     };
 
-    prev_map.insert(dev_name.to_string(), (read_bytes, write_bytes, now));
+    prev_map.insert(dev_key.to_string(), (read_bytes, write_bytes, now));
     result
 }
 
-/// Remove stale entries from the disk I/O delta cache (hot-swapped devices).
+/// Remove stale entries from the disk I/O delta cache (hot-swapped / unmounted devices).
+/// Keys match `compute_disk_io` — raw partition name as reported by sysinfo.
 fn prune_disk_io_cache(disks: &Disks) {
     use std::collections::HashSet;
-    let current_devs: HashSet<String> = disks
+    let current_keys: HashSet<String> = disks
         .iter()
-        .map(|d| extract_block_device(&d.name().to_string_lossy()))
+        .map(|d| d.name().to_string_lossy().into_owned())
         .collect();
     let mut prev_map = DISK_IO_PREV.lock().unwrap_or_else(|e| e.into_inner());
-    prev_map.retain(|k, _| current_devs.contains(k));
-}
-
-/// Extract the block device name from a disk path (e.g., "/dev/sda1" → "sda").
-/// Strips partition number suffix and returns the base device for sysfs lookup.
-fn extract_block_device(disk_name: &str) -> String {
-    let name = disk_name.strip_prefix("/dev/").unwrap_or(disk_name);
-    // Strip trailing digits for partition suffix (sda1 → sda, nvme0n1p1 → nvme0n1)
-    if name.starts_with("nvme") {
-        // NVMe: nvme0n1p1 → nvme0n1 (let chain: collapsible if)
-        if let Some(idx) = name.rfind('p')
-            && !name[idx + 1..].is_empty()
-            && name[idx + 1..].chars().all(|c| c.is_ascii_digit())
-            && idx > 0
-        {
-            name[..idx].to_string()
-        } else {
-            name.to_string()
-        }
-    } else {
-        // SATA/SCSI: sda1 → sda
-        name.trim_end_matches(|c: char| c.is_ascii_digit())
-            .to_string()
-    }
+    prev_map.retain(|k, _| current_keys.contains(k));
 }
 
 #[tracing::instrument]
@@ -176,8 +179,8 @@ pub(crate) async fn collect_sysinfo() -> SysinfoResult {
                 let total_bytes = disk.total_space();
                 let available_bytes = disk.available_space();
                 let used_bytes = total_bytes.saturating_sub(available_bytes);
-                let dev_name = extract_block_device(&disk.name().to_string_lossy());
-                let (read_bps, write_bps) = compute_disk_io(&dev_name, &disk.usage());
+                let dev_key = disk.name().to_string_lossy().into_owned();
+                let (read_bps, write_bps) = compute_disk_io(&dev_key, &disk.usage());
                 DiskInfo {
                     name: disk.name().to_string_lossy().into_owned(),
                     mount_point: disk.mount_point().to_string_lossy().into_owned(),

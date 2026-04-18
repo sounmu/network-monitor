@@ -33,9 +33,30 @@ fn get_metrics_token() -> &'static Option<String> {
     })
 }
 
+fn allow_unauthenticated_metrics() -> bool {
+    use std::sync::OnceLock;
+    static ALLOW_UNAUTHENTICATED: OnceLock<bool> = OnceLock::new();
+    *ALLOW_UNAUTHENTICATED.get_or_init(|| {
+        matches!(
+            std::env::var("ALLOW_UNAUTHENTICATED_METRICS")
+                .unwrap_or_default()
+                .trim()
+                .to_ascii_lowercase()
+                .as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    })
+}
+
 fn check_metrics_auth(headers: &HeaderMap) -> Result<(), AppError> {
     let Some(expected) = get_metrics_token().as_deref() else {
-        return Ok(()); // No token configured → open endpoint (legacy behavior).
+        if allow_unauthenticated_metrics() {
+            return Ok(());
+        }
+        return Err(AppError::Unauthorized(
+            "Prometheus endpoint requires METRICS_TOKEN unless ALLOW_UNAUTHENTICATED_METRICS=true"
+                .into(),
+        ));
     };
     let presented = headers
         .get(header::AUTHORIZATION)

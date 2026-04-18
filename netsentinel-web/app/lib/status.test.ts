@@ -94,4 +94,10 @@ describe("getHostStatus", () => {
     const oneMonthAgo = new Date(FIXED_NOW - 30 * 24 * 60 * 60_000).toISOString();
     expect(getHostStatus(oneMonthAgo)).toBe("offline");
   });
+
+  it("uses the host-specific scrape interval when provided", () => {
+    const fifteenSecondsAgo = new Date(FIXED_NOW - 15_000).toISOString();
+    expect(getHostStatus(fifteenSecondsAgo, true, 20)).toBe("online");
+    expect(getHostStatus(fifteenSecondsAgo, true, 5)).toBe("pending");
+  });
 });

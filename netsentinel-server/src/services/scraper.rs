@@ -3,7 +3,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use chrono::{SecondsFormat, Utc};
-use futures::stream::{self, StreamExt};
+use futures::StreamExt;
+use futures::stream;
 use reqwest::Client;
 
 use crate::models::agent_metrics::{AgentMetrics, SystemInfoResponse};
@@ -52,6 +53,8 @@ const MAX_BACKOFF_POWER: u32 = 4;
 /// after 60s (see `auth::generate_jwt`); rotating at 40s leaves a 20s safety
 /// window for clock drift and in-flight requests.
 const JWT_ROTATE_AFTER_SECS: u64 = 40;
+/// Cap the decoded agent response body before deserialization.
+const MAX_AGENT_PAYLOAD_BYTES: usize = 10 * 1024 * 1024;
 
 /// Cached agent JWT shared across all hosts in a scrape cycle.
 struct JwtCache {
@@ -101,18 +104,30 @@ pub fn start_scraper(state: Arc<AppState>) -> tokio::task::JoinHandle<()> {
             }
         };
 
-        let interval_secs = state.scrape_interval_secs;
-        tracing::info!(interval = interval_secs, "🔍 [Scraper] Started (DB-driven)");
+        let default_interval_secs = state.scrape_interval_secs;
+        tracing::info!(
+            default_interval = default_interval_secs,
+            scheduler_resolution = 1,
+            "🔍 [Scraper] Started (DB-driven)"
+        );
 
-        let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
+        let mut interval = tokio::time::interval(Duration::from_secs(1));
         let _ = interval.tick().await; // skip first immediate tick
 
         let mut backoff_map: HashMap<String, HostBackoff> = HashMap::new();
+        let mut last_scrape_attempt: HashMap<String, Instant> = HashMap::new();
         let mut jwt_cache: Option<JwtCache> = None;
 
         loop {
             interval.tick().await;
-            scrape_all(&client, &state, &mut backoff_map, &mut jwt_cache).await;
+            scrape_all(
+                &client,
+                &state,
+                &mut backoff_map,
+                &mut last_scrape_attempt,
+                &mut jwt_cache,
+            )
+            .await;
         }
     })
 }
@@ -121,6 +136,7 @@ async fn scrape_all(
     client: &Client,
     state: &Arc<AppState>,
     backoff_map: &mut HashMap<String, HostBackoff>,
+    last_scrape_attempt: &mut HashMap<String, Instant>,
     jwt_cache: &mut Option<JwtCache>,
 ) {
     // Read hosts + alert_configs from the in-memory snapshot instead of
@@ -129,11 +145,9 @@ async fn scrape_all(
     // alert config) and also by a 60 s background tick as a backstop.
     // Top-10 review finding #10.
     let snapshot = hosts_snapshot::load(&state.hosts_snapshot);
-    let hosts = snapshot.hosts.clone();
-    let alert_map = snapshot.alert_map.clone();
 
     // Pre-register any newly added hosts in last_known_status
-    state.pre_populate_status(&hosts);
+    state.pre_populate_status(&snapshot.hosts);
 
     // Mint (or reuse) a single agent JWT for this entire cycle — agents accept
     // any token that is unexpired, so all hosts share the same one.
@@ -145,51 +159,63 @@ async fn scrape_all(
         }
     };
 
-    let base_interval = Duration::from_secs(state.scrape_interval_secs);
+    last_scrape_attempt
+        .retain(|host_key, _| snapshot.hosts.iter().any(|host| host.host_key == *host_key));
+    backoff_map.retain(|host_key, _| snapshot.hosts.iter().any(|host| host.host_key == *host_key));
 
-    let futures = hosts
-        .into_iter()
-        .filter(|host| {
-            // Skip hosts that are in backoff (consecutive failures → exponential wait)
-            if let Some(backoff) = backoff_map.get(&host.host_key)
-                && backoff.consecutive_failures > 0
-            {
-                let power = backoff.consecutive_failures.min(MAX_BACKOFF_POWER);
-                let wait = base_interval * 2u32.pow(power);
-                if backoff.last_attempt.elapsed() < wait {
-                    return false;
-                }
-            }
-            true
-        })
-        .map(|host| {
-            let ctx = ScrapeContext {
-                client: client.clone(),
-                target: host.host_key.clone(),
-                display_name: host.display_name.clone(),
-                ports: host.ports.iter().map(|&p| p as u16).collect(),
-                containers: host.containers.clone(),
-                alert_config: alert_configs_repo::resolve_alert_config(
-                    &host.host_key,
-                    host.load_threshold,
-                    &alert_map,
-                ),
-                state: state.clone(),
-                jwt_token: jwt_token.clone(),
-                system_info_updated_at: host.system_info_updated_at,
-                is_known_host: true,
-            };
+    let mut due_contexts = Vec::new();
+    for host in &snapshot.hosts {
+        let scrape_interval_secs = u64::try_from(host.scrape_interval_secs)
+            .ok()
+            .filter(|secs| *secs > 0)
+            .unwrap_or(state.scrape_interval_secs);
+        let host_interval = Duration::from_secs(scrape_interval_secs);
 
-            async move {
-                let result = scrape_one(&ctx).await;
-                (ctx.target, ctx.display_name, result)
+        if let Some(last_attempt) = last_scrape_attempt.get(&host.host_key)
+            && last_attempt.elapsed() < host_interval
+        {
+            continue;
+        }
+
+        if let Some(backoff) = backoff_map.get(&host.host_key)
+            && backoff.consecutive_failures > 0
+        {
+            let power = backoff.consecutive_failures.min(MAX_BACKOFF_POWER);
+            let wait = host_interval * 2u32.pow(power);
+            if backoff.last_attempt.elapsed() < wait {
+                continue;
             }
+        }
+
+        last_scrape_attempt.insert(host.host_key.clone(), Instant::now());
+        due_contexts.push(ScrapeContext {
+            client: client.clone(),
+            target: host.host_key.clone(),
+            display_name: host.display_name.clone(),
+            ports: host.ports.iter().map(|&p| p as u16).collect(),
+            containers: host.containers.clone(),
+            alert_config: alert_configs_repo::resolve_alert_config(
+                &host.host_key,
+                host.load_threshold,
+                &snapshot.alert_map,
+            ),
+            state: state.clone(),
+            jwt_token: jwt_token.clone(),
+            system_info_updated_at: host.system_info_updated_at,
+            scrape_interval_secs,
+            is_known_host: true,
         });
+    }
 
-    let results = stream::iter(futures)
-        .buffer_unordered(10)
-        .collect::<Vec<_>>()
-        .await;
+    let results = stream::iter(due_contexts.into_iter().map(|ctx| async move {
+        let target = ctx.target.clone();
+        let display_name = ctx.display_name.clone();
+        let result = scrape_one(&ctx).await;
+        (target, display_name, result)
+    }))
+    .buffer_unordered(10)
+    .collect::<Vec<_>>()
+    .await;
 
     // ── Collect persist data and update backoff tracking ──
     let mut success_count = 0;
@@ -271,6 +297,7 @@ struct ScrapeContext {
     state: Arc<AppState>,
     jwt_token: String,
     system_info_updated_at: Option<DateTime<Utc>>,
+    scrape_interval_secs: u64,
     is_known_host: bool,
 }
 
@@ -298,11 +325,32 @@ async fn scrape_one(ctx: &ScrapeContext) -> ScrapeOutcome {
         .send()
         .await
     {
-        Ok(resp) if resp.status().is_success() => match resp.bytes().await {
-            Ok(bytes) if bytes.len() > 10 * 1024 * 1024 => {
-                ScrapeOutcome::Failed(format!("Payload too large: {} bytes", bytes.len()))
+        Ok(resp) if resp.status().is_success() => {
+            let mut bytes = Vec::new();
+            let mut resp = resp;
+            loop {
+                match resp.chunk().await {
+                    Ok(Some(chunk)) => {
+                        let next_len = bytes.len().saturating_add(chunk.len());
+                        if next_len > MAX_AGENT_PAYLOAD_BYTES {
+                            return ScrapeOutcome::Failed(format!(
+                                "Payload too large: exceeds {} bytes",
+                                MAX_AGENT_PAYLOAD_BYTES
+                            ));
+                        }
+                        bytes.extend_from_slice(&chunk);
+                    }
+                    Ok(None) => break,
+                    Err(e) => {
+                        return ScrapeOutcome::Failed(format!(
+                            "Failed to read response body chunk: {}",
+                            e
+                        ));
+                    }
+                }
             }
-            Ok(bytes) => match bincode::deserialize::<AgentMetrics>(&bytes) {
+
+            match bincode::deserialize::<AgentMetrics>(&bytes) {
                 Ok(mut metrics) => {
                     // Defense-in-depth: cap untrusted Vec fields to sane maximums
                     metrics.cpu_cores.truncate(1024);
@@ -324,15 +372,26 @@ async fn scrape_one(ctx: &ScrapeContext) -> ScrapeOutcome {
                     handle_success(metrics, ctx).await
                 }
                 Err(e) => ScrapeOutcome::Failed(format!("Bincode deserialization error: {}", e)),
-            },
-            Err(e) => ScrapeOutcome::Failed(format!("Failed to read response body: {}", e)),
-        },
+            }
+        }
         Ok(_resp) => {
-            handle_down(&ctx.target, &ctx.display_name, &ctx.state).await;
+            handle_down(
+                &ctx.target,
+                &ctx.display_name,
+                ctx.scrape_interval_secs,
+                &ctx.state,
+            )
+            .await;
             ScrapeOutcome::Offline
         }
         Err(_e) => {
-            handle_down(&ctx.target, &ctx.display_name, &ctx.state).await;
+            handle_down(
+                &ctx.target,
+                &ctx.display_name,
+                ctx.scrape_interval_secs,
+                &ctx.state,
+            )
+            .await;
             ScrapeOutcome::Offline
         }
     }
@@ -356,8 +415,14 @@ async fn handle_success(metrics: AgentMetrics, ctx: &ScrapeContext) -> ScrapeOut
         tracing::warn!(err = ?e, "⚠️ [Scraper] Failed to auto-register host");
     }
 
-    match metrics_service::process_metrics(&metrics, &ctx.target, &ctx.state, &ctx.alert_config)
-        .await
+    match metrics_service::process_metrics(
+        &metrics,
+        &ctx.target,
+        &ctx.state,
+        &ctx.alert_config,
+        ctx.scrape_interval_secs,
+    )
+    .await
     {
         Ok(result) => {
             tracing::info!(target = %ctx.target, "✅ [Scraper] {}", result.log_msg);
@@ -521,12 +586,14 @@ async fn fetch_and_store_system_info(
     if let Ok(mut lks) = state.last_known_status.write()
         && let Some(status) = lks.get_mut(target)
     {
-        status.os_info = Some(info.os);
-        status.cpu_model = Some(info.cpu_model);
+        status.os_info = Some(info.os.clone());
+        status.cpu_model = Some(info.cpu_model.clone());
         status.memory_total_mb = Some(info.memory_total_mb as i64);
         status.boot_time = Some(info.boot_time as i64);
-        status.ip_address = Some(info.ip_address);
+        status.ip_address = Some(info.ip_address.clone());
     }
+
+    hosts_snapshot::apply_system_info(&state.hosts_snapshot, target, &info);
 
     tracing::info!(target = %target, "✅ [SystemInfo] Updated");
 }
@@ -535,7 +602,12 @@ async fn fetch_and_store_system_info(
 // Failure path
 // ──────────────────────────────────────────────
 
-async fn handle_down(target: &str, display_name: &str, state: &Arc<AppState>) {
+async fn handle_down(
+    target: &str,
+    display_name: &str,
+    scrape_interval_secs: u64,
+    state: &Arc<AppState>,
+) {
     let now = Instant::now();
     let host_key = target.to_string();
 
@@ -608,6 +680,7 @@ async fn handle_down(target: &str, display_name: &str, state: &Arc<AppState>) {
                 .or_insert_with(|| HostStatusPayload {
                     host_key: host_key.clone(),
                     display_name: hostname.clone(),
+                    scrape_interval_secs,
                     is_online: false,
                     last_seen: String::new(),
                     docker_containers: vec![],
@@ -624,6 +697,7 @@ async fn handle_down(target: &str, display_name: &str, state: &Arc<AppState>) {
                     ip_address: None,
                 });
             // Update only the fields that change — reuse existing Vec data (no clone)
+            status.scrape_interval_secs = scrape_interval_secs;
             status.is_online = false;
             status.last_seen = server_ts;
             status.processes = vec![];

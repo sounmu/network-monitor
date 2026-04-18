@@ -47,13 +47,21 @@ pub(crate) async fn auth_middleware(req: Request, next: Next) -> Result<Response
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     };
     let mut validation = Validation::new(Algorithm::HS256);
-    // Only accept tokens with aud: "agent". Tokens without aud are rejected.
+    // Prefer strict `aud = "agent"` validation, but keep accepting the
+    // legacy no-aud token shape for mixed-version rollouts.
     validation.set_audience(&["agent"]);
 
-    match decode::<Claims>(token, key, &validation) {
-        Ok(_) => Ok(next.run(req).await),
-        Err(e) => {
-            tracing::warn!(err = ?e, "⚠️ [Auth] JWT validation failed");
+    if decode::<Claims>(token, key, &validation).is_ok() {
+        return Ok(next.run(req).await);
+    }
+
+    let mut legacy_validation = Validation::new(Algorithm::HS256);
+    legacy_validation.validate_aud = false;
+
+    match decode::<Claims>(token, key, &legacy_validation) {
+        Ok(data) if data.claims.aud.is_empty() => Ok(next.run(req).await),
+        Ok(_) | Err(_) => {
+            tracing::warn!("⚠️ [Auth] JWT validation failed");
             Err(StatusCode::UNAUTHORIZED)
         }
     }

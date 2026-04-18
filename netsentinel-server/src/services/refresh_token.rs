@@ -151,47 +151,56 @@ pub async fn rotate(
         return Ok(RotateOutcome::Rejected);
     }
 
-    let token_hash = hash_token(presented);
-    let existing = refresh_tokens_repo::find_by_hash(pool, &token_hash)
-        .await
-        .map_err(|e| AppError::Internal(format!("Failed to look up refresh token: {e}")))?;
-
-    let Some(row) = existing else {
-        return Ok(RotateOutcome::Rejected);
-    };
-
-    // Hard expiry check — expired tokens are never accepted even if the
-    // family itself is still live.
-    if row.expires_at <= Utc::now() {
-        return Ok(RotateOutcome::Rejected);
-    }
-
-    // Reuse detection: a revoked row means this exact hash has been
-    // redeemed before. Either the client is buggy or someone stole the
-    // cookie. Blow up the whole family.
-    if row.revoked_at.is_some() {
-        return Ok(handle_reuse_detected(pool, &row).await);
-    }
-
-    // Happy path: revoke the old row and insert a new one in the same
-    // family, wrapped in a transaction so a concurrent request presenting
-    // the same token cannot slip between the revoke and the insert.
-    let new_plain = encode_plaintext(&random_token_bytes());
-    let new_hash = hash_token(&new_plain);
-    let new_expires_at = Utc::now() + Duration::days(REFRESH_TTL_DAYS);
-
     let mut tx = pool
         .begin()
         .await
         .map_err(|e| AppError::Internal(format!("Failed to begin transaction: {e}")))?;
 
-    sqlx::query(
+    let token_hash = hash_token(presented);
+    let existing = sqlx::query_as::<_, RefreshTokenRow>(
+        r#"
+        SELECT id, user_id, family_id, parent_id, issued_at, expires_at, revoked_at
+        FROM refresh_tokens
+        WHERE token_hash = $1
+        FOR UPDATE
+        "#,
+    )
+    .bind(&token_hash)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|e| AppError::Internal(format!("Failed to look up refresh token: {e}")))?;
+
+    let Some(row) = existing else {
+        tx.rollback().await.ok();
+        return Ok(RotateOutcome::Rejected);
+    };
+
+    if row.expires_at <= Utc::now() {
+        tx.rollback().await.ok();
+        return Ok(RotateOutcome::Rejected);
+    }
+
+    if row.revoked_at.is_some() {
+        tx.rollback().await.ok();
+        return Ok(handle_reuse_detected(pool, &row).await);
+    }
+
+    let new_plain = encode_plaintext(&random_token_bytes());
+    let new_hash = hash_token(&new_plain);
+    let new_expires_at = Utc::now() + Duration::days(REFRESH_TTL_DAYS);
+
+    let revoke_result = sqlx::query(
         "UPDATE refresh_tokens SET revoked_at = NOW() WHERE id = $1 AND revoked_at IS NULL",
     )
     .bind(row.id)
     .execute(&mut *tx)
     .await
     .map_err(|e| AppError::Internal(format!("Failed to revoke rotated token: {e}")))?;
+
+    if revoke_result.rows_affected() != 1 {
+        tx.rollback().await.ok();
+        return Ok(handle_reuse_detected(pool, &row).await);
+    }
 
     sqlx::query(
         r#"

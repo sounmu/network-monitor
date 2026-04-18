@@ -22,21 +22,17 @@ const REFRESH_COOKIE_NAME: &str = "nm_refresh";
 
 /// Whether the refresh cookie should carry the `Secure` flag.
 /// Evaluated once on first call and cached for the process lifetime via
-/// `OnceLock`. Derived from `ALLOWED_ORIGINS`: if the variable is set
-/// AND every configured origin uses `https://`, we set `Secure`;
-/// otherwise (unset, empty, or any `http://` origin) we omit it so the
-/// browser stores the cookie over plain HTTP in development.
+/// `OnceLock`. Secure-by-default: operators must explicitly opt out with
+/// `COOKIE_SECURE=false` for local plain-HTTP development.
 fn is_secure_cookie() -> bool {
     use std::sync::OnceLock;
     static SECURE: OnceLock<bool> = OnceLock::new();
-    *SECURE.get_or_init(|| {
-        let raw = std::env::var("ALLOWED_ORIGINS").unwrap_or_default();
-        let origins: Vec<&str> = raw
-            .split(',')
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty())
-            .collect();
-        !origins.is_empty() && origins.iter().all(|o| o.starts_with("https://"))
+    *SECURE.get_or_init(|| match std::env::var("COOKIE_SECURE") {
+        Ok(value) => !matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "0" | "false" | "no" | "off"
+        ),
+        Err(_) => true,
     })
 }
 
@@ -87,6 +83,18 @@ fn extract_user_agent(headers: &HeaderMap) -> Option<String> {
 /// Build a JSON response that also carries a `Set-Cookie` header.
 fn json_with_cookie<T: serde::Serialize>(body: &T, cookie: &str) -> Result<Response, AppError> {
     let mut resp = Json(body).into_response();
+    let header_value = HeaderValue::from_str(cookie)
+        .map_err(|e| AppError::Internal(format!("Invalid Set-Cookie header value: {e}")))?;
+    resp.headers_mut().append(SET_COOKIE, header_value);
+    Ok(resp)
+}
+
+fn unauthorized_json_with_cookie(message: &str, cookie: &str) -> Result<Response, AppError> {
+    let mut resp = (
+        StatusCode::UNAUTHORIZED,
+        Json(serde_json::json!({ "error": message })),
+    )
+        .into_response();
     let header_value = HeaderValue::from_str(cookie)
         .map_err(|e| AppError::Internal(format!("Invalid Set-Cookie header value: {e}")))?;
     resp.headers_mut().append(SET_COOKIE, header_value);
@@ -230,33 +238,15 @@ pub async fn refresh(
                 user_id,
                 "🚨 [Auth] /refresh returning 401 after reuse detection"
             );
-            let mut resp = (
-                StatusCode::UNAUTHORIZED,
-                Json(serde_json::json!({
-                    "error": "Session terminated — please sign in again"
-                })),
+            unauthorized_json_with_cookie(
+                "Session terminated — please sign in again",
+                &build_refresh_cookie_expiry(),
             )
-                .into_response();
-            resp.headers_mut().append(
-                SET_COOKIE,
-                HeaderValue::from_str(&build_refresh_cookie_expiry())
-                    .map_err(|e| AppError::Internal(format!("header build: {e}")))?,
-            );
-            Ok(resp)
         }
-        RotateOutcome::Rejected => {
-            let mut resp = (
-                StatusCode::UNAUTHORIZED,
-                Json(serde_json::json!({ "error": "Invalid or expired refresh token" })),
-            )
-                .into_response();
-            resp.headers_mut().append(
-                SET_COOKIE,
-                HeaderValue::from_str(&build_refresh_cookie_expiry())
-                    .map_err(|e| AppError::Internal(format!("header build: {e}")))?,
-            );
-            Ok(resp)
-        }
+        RotateOutcome::Rejected => unauthorized_json_with_cookie(
+            "Invalid or expired refresh token",
+            &build_refresh_cookie_expiry(),
+        ),
     }
 }
 
@@ -303,12 +293,18 @@ pub async fn setup(
         .map_err(|e| AppError::Internal(format!("Hash task failed: {e:#}")))?
         .map_err(|e| AppError::Internal(format!("Failed to hash password: {e:#}")))?;
 
-    // Transaction prevents TOCTOU: count check + insert are atomic.
+    // Lock the users table so concurrent bootstrap requests cannot both
+    // observe "no users yet" and create separate admin accounts.
     let mut tx = state
         .db_pool
         .begin()
         .await
         .map_err(|e| AppError::Internal(format!("Failed to begin transaction: {e:#}")))?;
+
+    sqlx::query("LOCK TABLE users IN ACCESS EXCLUSIVE MODE")
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to lock users table: {e:#}")))?;
 
     let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*)::BIGINT FROM users")
         .fetch_one(&mut *tx)
@@ -523,7 +519,9 @@ pub async fn issue_sse_ticket(
     auth: UserGuard,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<SseTicketResponse>, AppError> {
-    let ticket = state.sse_ticket_store.issue(auth.claims.sub);
+    let ticket = state
+        .sse_ticket_store
+        .issue(auth.claims.sub, auth.claims.iat);
 
     Ok(Json(SseTicketResponse {
         ticket,

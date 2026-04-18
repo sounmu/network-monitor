@@ -77,7 +77,7 @@ pub fn update_tokens_revoked_at(user_id: i32, timestamp: i64) {
 /// user (password change OR explicit logout). Returns true if the token is
 /// still valid. A missing cache entry means the user has never revoked and
 /// every signed token with a valid `iat` is accepted.
-fn is_token_iat_still_valid(user_id: i32, iat: usize) -> bool {
+pub(crate) fn is_token_iat_still_valid(user_id: i32, iat: usize) -> bool {
     let Some(cache) = TOKEN_REVOCATION_CACHE.get() else {
         return true; // Cache not initialized — graceful degradation
     };

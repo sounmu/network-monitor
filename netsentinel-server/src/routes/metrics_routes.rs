@@ -75,10 +75,19 @@ pub fn create_router(state: Arc<AppState>) -> Router {
                 .put(alert_configs_handler::update_global_configs),
         )
         .route(
+            "/api/alert-configs/bulk",
+            post(alert_configs_handler::bulk_update_host_configs),
+        )
+        .route(
             "/api/alert-configs/{host_key}",
             get(alert_configs_handler::get_host_configs)
                 .put(alert_configs_handler::update_host_configs)
                 .delete(alert_configs_handler::delete_host_configs),
+        )
+        // Active alerts (currently firing, computed from alert_history)
+        .route(
+            "/api/alerts/active",
+            get(alert_history_handler::get_active_alerts),
         )
         // Notification channels CRUD
         .route(

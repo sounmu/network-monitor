@@ -71,6 +71,37 @@ pub enum AlertAction {
         mount_point: String,
         current: f32,
     },
+    NetworkOverload {
+        hostname: String,
+        bytes_per_sec: f64,
+        threshold: f64,
+    },
+    NetworkRecovery {
+        hostname: String,
+        bytes_per_sec: f64,
+    },
+    TemperatureOverload {
+        hostname: String,
+        sensor: String,
+        threshold: f64,
+        current: f32,
+    },
+    TemperatureRecovery {
+        hostname: String,
+        sensor: String,
+        current: f32,
+    },
+    GpuOverload {
+        hostname: String,
+        gpu: String,
+        threshold: f64,
+        current: f32,
+    },
+    GpuRecovery {
+        hostname: String,
+        gpu: String,
+        current: f32,
+    },
 }
 
 impl AlertAction {
@@ -87,6 +118,12 @@ impl AlertAction {
             Self::PortRecovery { .. } => "port_recovery",
             Self::DiskOverload { .. } => "disk_overload",
             Self::DiskRecovery { .. } => "disk_recovery",
+            Self::NetworkOverload { .. } => "network_overload",
+            Self::NetworkRecovery { .. } => "network_recovery",
+            Self::TemperatureOverload { .. } => "temperature_overload",
+            Self::TemperatureRecovery { .. } => "temperature_recovery",
+            Self::GpuOverload { .. } => "gpu_overload",
+            Self::GpuRecovery { .. } => "gpu_recovery",
         }
     }
 
@@ -156,6 +193,58 @@ impl AlertAction {
                 "✅ **[Disk Recovery]** Host `{}` — disk `{}` usage has returned to normal. (current: {:.1}%)",
                 hostname, mount_point, current
             ),
+            Self::NetworkOverload {
+                hostname,
+                bytes_per_sec,
+                threshold,
+            } => format!(
+                "📡 **[Network Overload]** Host `{}` — aggregate network throughput is {:.1} MB/s (threshold {:.1} MB/s).",
+                hostname,
+                bytes_per_sec / 1_000_000.0,
+                threshold / 1_000_000.0
+            ),
+            Self::NetworkRecovery {
+                hostname,
+                bytes_per_sec,
+            } => format!(
+                "✅ **[Network Recovery]** Host `{}` — network throughput has returned to normal. (current: {:.1} MB/s)",
+                hostname,
+                bytes_per_sec / 1_000_000.0
+            ),
+            Self::TemperatureOverload {
+                hostname,
+                sensor,
+                threshold,
+                current,
+            } => format!(
+                "🌡️ **[Temperature Overload]** Host `{}` — sensor `{}` reads {:.1}°C (threshold {:.1}°C).",
+                hostname, sensor, current, threshold
+            ),
+            Self::TemperatureRecovery {
+                hostname,
+                sensor,
+                current,
+            } => format!(
+                "✅ **[Temperature Recovery]** Host `{}` — sensor `{}` returned to {:.1}°C.",
+                hostname, sensor, current
+            ),
+            Self::GpuOverload {
+                hostname,
+                gpu,
+                threshold,
+                current,
+            } => format!(
+                "🎮 **[GPU Overload]** Host `{}` — GPU `{}` usage is {:.1}% (threshold {:.1}%).",
+                hostname, gpu, current, threshold
+            ),
+            Self::GpuRecovery {
+                hostname,
+                gpu,
+                current,
+            } => format!(
+                "✅ **[GPU Recovery]** Host `{}` — GPU `{}` returned to {:.1}%.",
+                hostname, gpu, current
+            ),
         }
     }
 }
@@ -182,6 +271,7 @@ pub async fn process_metrics(
     target: &str,
     state: &AppState,
     alert_config: &AlertConfig,
+    scrape_interval_secs: u64,
 ) -> Result<ProcessResult, AppError> {
     tracing::debug!(hostname = %metrics.hostname, is_online = %metrics.is_online, "Processing metrics (overview)");
     tracing::trace!(metrics = ?metrics, "Detailed metrics JSON data");
@@ -272,7 +362,13 @@ pub async fn process_metrics(
         };
 
         // ── Evaluate alert conditions (iterates alert_history only, no I/O) ──
-        let alert_actions = collect_alerts(record, &hostname, alert_config, metrics);
+        let alert_actions = collect_alerts(
+            record,
+            &hostname,
+            alert_config,
+            metrics,
+            &metrics_payload.network_rate,
+        );
 
         tracing::info!(
             target = %target,
@@ -305,6 +401,7 @@ pub async fn process_metrics(
         Some(HostStatusPayload {
             host_key: metrics_payload.host_key.clone(),
             display_name: hostname.clone(),
+            scrape_interval_secs,
             is_online: metrics.is_online,
             last_seen: server_ts,
             docker_containers: metrics.docker_containers.clone(),
@@ -486,6 +583,7 @@ fn collect_alerts(
     hostname: &str,
     alert_config: &AlertConfig,
     metrics: &AgentMetrics,
+    network_rate: &NetworkRate,
 ) -> Vec<AlertAction> {
     let mut actions = Vec::new();
 
@@ -494,6 +592,21 @@ fn collect_alerts(
     collect_load_alerts(record, hostname, alert_config, metrics, &mut actions);
     collect_port_alerts(record, hostname, metrics, &mut actions);
     collect_disk_alerts(record, hostname, &alert_config.disk, metrics, &mut actions);
+    collect_network_alerts(
+        record,
+        hostname,
+        &alert_config.network,
+        network_rate,
+        &mut actions,
+    );
+    collect_temperature_alerts(
+        record,
+        hostname,
+        &alert_config.temperature,
+        metrics,
+        &mut actions,
+    );
+    collect_gpu_alerts(record, hostname, &alert_config.gpu, metrics, &mut actions);
 
     actions
 }
@@ -706,6 +819,129 @@ fn collect_disk_alerts(
     }
 }
 
+// ── Network throughput check ────────────────
+
+fn collect_network_alerts(
+    record: &HostRecord,
+    hostname: &str,
+    rule: &MetricAlertRule,
+    rate: &NetworkRate,
+    actions: &mut Vec<AlertAction>,
+) {
+    if !rule.enabled {
+        return;
+    }
+
+    let aggregate = rate.rx_bytes_per_sec + rate.tx_bytes_per_sec;
+    if aggregate > rule.threshold {
+        if !record.alert_state.network_alerted
+            && cooldown_elapsed(record.alert_state.last_network_alert, rule.cooldown_secs)
+        {
+            actions.push(AlertAction::NetworkOverload {
+                hostname: hostname.to_string(),
+                bytes_per_sec: aggregate,
+                threshold: rule.threshold,
+            });
+        }
+    } else if record.alert_state.network_alerted {
+        actions.push(AlertAction::NetworkRecovery {
+            hostname: hostname.to_string(),
+            bytes_per_sec: aggregate,
+        });
+    }
+}
+
+// ── Temperature check (per sensor) ──────────
+
+fn collect_temperature_alerts(
+    record: &HostRecord,
+    hostname: &str,
+    rule: &MetricAlertRule,
+    metrics: &AgentMetrics,
+    actions: &mut Vec<AlertAction>,
+) {
+    if !rule.enabled {
+        return;
+    }
+
+    for sensor in &metrics.system.temperatures {
+        let label = &sensor.label;
+        let current = sensor.temperature_c;
+        let was_alerted = record
+            .alert_state
+            .temperature_alerted
+            .get(label)
+            .copied()
+            .unwrap_or(false);
+
+        if (current as f64) > rule.threshold {
+            if !was_alerted
+                && cooldown_elapsed(
+                    record.alert_state.last_temperature_alert,
+                    rule.cooldown_secs,
+                )
+            {
+                actions.push(AlertAction::TemperatureOverload {
+                    hostname: hostname.to_string(),
+                    sensor: label.clone(),
+                    threshold: rule.threshold,
+                    current,
+                });
+            }
+        } else if was_alerted {
+            actions.push(AlertAction::TemperatureRecovery {
+                hostname: hostname.to_string(),
+                sensor: label.clone(),
+                current,
+            });
+        }
+    }
+}
+
+// ── GPU check (per device) ──────────────────
+
+fn collect_gpu_alerts(
+    record: &HostRecord,
+    hostname: &str,
+    rule: &MetricAlertRule,
+    metrics: &AgentMetrics,
+    actions: &mut Vec<AlertAction>,
+) {
+    if !rule.enabled {
+        return;
+    }
+
+    for gpu in &metrics.system.gpus {
+        let name = &gpu.name;
+        let current = gpu.gpu_usage_percent as f32;
+        let was_alerted = record
+            .alert_state
+            .gpu_alerted
+            .get(name)
+            .copied()
+            .unwrap_or(false);
+
+        if (current as f64) > rule.threshold {
+            if !was_alerted
+                && cooldown_elapsed(record.alert_state.last_gpu_alert, rule.cooldown_secs)
+            {
+                actions.push(AlertAction::GpuOverload {
+                    hostname: hostname.to_string(),
+                    gpu: name.clone(),
+                    threshold: rule.threshold,
+                    current,
+                });
+            }
+        } else if was_alerted {
+            actions.push(AlertAction::GpuRecovery {
+                hostname: hostname.to_string(),
+                gpu: name.clone(),
+                current,
+            });
+        }
+    }
+}
+
 // ──────────────────────────────────────────────
 // Shared utilities
 // ──────────────────────────────────────────────
@@ -755,6 +991,30 @@ fn update_alert_state_after_send(record: &mut HostRecord, actions: &[AlertAction
             }
             AlertAction::DiskRecovery { mount_point, .. } => {
                 record.alert_state.disk_alerted.remove(mount_point);
+            }
+            AlertAction::NetworkOverload { .. } => {
+                record.alert_state.network_alerted = true;
+                record.alert_state.last_network_alert = Some(now);
+            }
+            AlertAction::NetworkRecovery { .. } => {
+                record.alert_state.network_alerted = false;
+            }
+            AlertAction::TemperatureOverload { sensor, .. } => {
+                record
+                    .alert_state
+                    .temperature_alerted
+                    .insert(sensor.clone(), true);
+                record.alert_state.last_temperature_alert = Some(now);
+            }
+            AlertAction::TemperatureRecovery { sensor, .. } => {
+                record.alert_state.temperature_alerted.remove(sensor);
+            }
+            AlertAction::GpuOverload { gpu, .. } => {
+                record.alert_state.gpu_alerted.insert(gpu.clone(), true);
+                record.alert_state.last_gpu_alert = Some(now);
+            }
+            AlertAction::GpuRecovery { gpu, .. } => {
+                record.alert_state.gpu_alerted.remove(gpu);
             }
         }
     }
@@ -1439,5 +1699,170 @@ mod tests {
         let mut actions = Vec::new();
         collect_disk_alerts(&record, TEST_HOSTNAME, &rule, &metrics, &mut actions);
         assert!(actions.is_empty());
+    }
+
+    // ── Network / Temperature / GPU ──────────────
+
+    fn enabled_rule(threshold: f64) -> MetricAlertRule {
+        MetricAlertRule {
+            enabled: true,
+            threshold,
+            sustained_secs: 0,
+            cooldown_secs: 0,
+        }
+    }
+
+    #[test]
+    fn test_network_alert_fires_when_rate_exceeds_threshold() {
+        let record = make_record();
+        let rule = enabled_rule(100.0); // 100 B/s
+        let rate = NetworkRate {
+            rx_bytes_per_sec: 80.0,
+            tx_bytes_per_sec: 80.0,
+        };
+        let mut actions = Vec::new();
+        collect_network_alerts(&record, TEST_HOSTNAME, &rule, &rate, &mut actions);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(actions[0], AlertAction::NetworkOverload { .. }));
+    }
+
+    #[test]
+    fn test_network_alert_silent_below_threshold() {
+        let record = make_record();
+        let rule = enabled_rule(1_000_000.0);
+        let rate = NetworkRate {
+            rx_bytes_per_sec: 10.0,
+            tx_bytes_per_sec: 10.0,
+        };
+        let mut actions = Vec::new();
+        collect_network_alerts(&record, TEST_HOSTNAME, &rule, &rate, &mut actions);
+        assert!(actions.is_empty());
+    }
+
+    #[test]
+    fn test_network_alert_recovery_fires_when_was_alerted() {
+        let mut record = make_record();
+        record.alert_state.network_alerted = true;
+        let rule = enabled_rule(1_000_000.0);
+        let rate = NetworkRate {
+            rx_bytes_per_sec: 10.0,
+            tx_bytes_per_sec: 10.0,
+        };
+        let mut actions = Vec::new();
+        collect_network_alerts(&record, TEST_HOSTNAME, &rule, &rate, &mut actions);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(actions[0], AlertAction::NetworkRecovery { .. }));
+    }
+
+    #[test]
+    fn test_temperature_alert_fires_per_sensor() {
+        use crate::models::agent_metrics::TemperatureInfo;
+        let record = make_record();
+        let rule = enabled_rule(80.0);
+        let mut metrics = make_metrics(1.0, 10.0, vec![]);
+        metrics.system.temperatures = vec![
+            TemperatureInfo {
+                label: "cpu".to_string(),
+                temperature_c: 90.0,
+            },
+            TemperatureInfo {
+                label: "gpu".to_string(),
+                temperature_c: 50.0,
+            },
+        ];
+        let mut actions = Vec::new();
+        collect_temperature_alerts(&record, TEST_HOSTNAME, &rule, &metrics, &mut actions);
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            AlertAction::TemperatureOverload { sensor, .. } => assert_eq!(sensor, "cpu"),
+            _ => panic!("expected TemperatureOverload"),
+        }
+    }
+
+    #[test]
+    fn test_temperature_alert_disabled_rule() {
+        use crate::models::agent_metrics::TemperatureInfo;
+        let record = make_record();
+        let rule = MetricAlertRule {
+            enabled: false,
+            ..enabled_rule(50.0)
+        };
+        let mut metrics = make_metrics(1.0, 10.0, vec![]);
+        metrics.system.temperatures = vec![TemperatureInfo {
+            label: "cpu".to_string(),
+            temperature_c: 100.0,
+        }];
+        let mut actions = Vec::new();
+        collect_temperature_alerts(&record, TEST_HOSTNAME, &rule, &metrics, &mut actions);
+        assert!(actions.is_empty());
+    }
+
+    #[test]
+    fn test_temperature_alert_recovery_per_sensor() {
+        use crate::models::agent_metrics::TemperatureInfo;
+        let mut record = make_record();
+        record
+            .alert_state
+            .temperature_alerted
+            .insert("cpu".to_string(), true);
+        let rule = enabled_rule(80.0);
+        let mut metrics = make_metrics(1.0, 10.0, vec![]);
+        metrics.system.temperatures = vec![TemperatureInfo {
+            label: "cpu".to_string(),
+            temperature_c: 40.0,
+        }];
+        let mut actions = Vec::new();
+        collect_temperature_alerts(&record, TEST_HOSTNAME, &rule, &metrics, &mut actions);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(
+            actions[0],
+            AlertAction::TemperatureRecovery { .. }
+        ));
+    }
+
+    #[test]
+    fn test_gpu_alert_fires_per_device() {
+        use crate::models::agent_metrics::GpuInfo;
+        let record = make_record();
+        let rule = enabled_rule(90.0);
+        let mut metrics = make_metrics(1.0, 10.0, vec![]);
+        metrics.system.gpus = vec![GpuInfo {
+            name: "RTX 4090".to_string(),
+            gpu_usage_percent: 95,
+            memory_used_mb: 0,
+            memory_total_mb: 0,
+            temperature_c: 0,
+            power_watts: None,
+            frequency_mhz: None,
+        }];
+        let mut actions = Vec::new();
+        collect_gpu_alerts(&record, TEST_HOSTNAME, &rule, &metrics, &mut actions);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(actions[0], AlertAction::GpuOverload { .. }));
+    }
+
+    #[test]
+    fn test_gpu_alert_recovery_clears_state() {
+        use crate::models::agent_metrics::GpuInfo;
+        let mut record = make_record();
+        record
+            .alert_state
+            .gpu_alerted
+            .insert("RTX 4090".to_string(), true);
+        let rule = enabled_rule(90.0);
+        let mut metrics = make_metrics(1.0, 10.0, vec![]);
+        metrics.system.gpus = vec![GpuInfo {
+            name: "RTX 4090".to_string(),
+            gpu_usage_percent: 40,
+            memory_used_mb: 0,
+            memory_total_mb: 0,
+            temperature_c: 0,
+            power_watts: None,
+            frequency_mhz: None,
+        }];
+        let mut actions = Vec::new();
+        collect_gpu_alerts(&record, TEST_HOSTNAME, &rule, &metrics, &mut actions);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(actions[0], AlertAction::GpuRecovery { .. }));
     }
 }

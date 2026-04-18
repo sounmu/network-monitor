@@ -76,6 +76,10 @@ impl AppState {
                 .or_insert_with(|| HostStatusPayload {
                     host_key: host.host_key.clone(),
                     display_name: host.display_name.clone(),
+                    scrape_interval_secs: u64::try_from(host.scrape_interval_secs)
+                        .ok()
+                        .filter(|secs| *secs > 0)
+                        .unwrap_or(self.scrape_interval_secs),
                     is_online: false,
                     last_seen: String::new(),
                     docker_containers: vec![],
@@ -127,6 +131,17 @@ pub struct AlertConfig {
     pub cpu: MetricAlertRule,
     pub memory: MetricAlertRule,
     pub disk: MetricAlertRule,
+    /// Load-average rule loaded from alert_configs (metric_type='load').
+    /// When present, this takes precedence over `load_threshold` / `load_cooldown_secs`
+    /// below, which are carried forward for back-compat with the per-host `hosts.load_threshold`
+    /// column.
+    pub load: MetricAlertRule,
+    /// Aggregate network throughput rule — threshold is bytes/sec across all physical NICs.
+    pub network: MetricAlertRule,
+    /// Temperature rule — applied to every sensor in the scrape payload.
+    pub temperature: MetricAlertRule,
+    /// GPU usage rule — applied to every GPU device.
+    pub gpu: MetricAlertRule,
     pub load_threshold: f64,
     pub load_cooldown_secs: u64,
 }
@@ -150,6 +165,30 @@ impl Default for AlertConfig {
                 enabled: true,
                 threshold: 90.0,
                 sustained_secs: 0, // Disk alerts fire immediately (no sustained window)
+                cooldown_secs: 300,
+            },
+            load: MetricAlertRule {
+                enabled: false,
+                threshold: 4.0,
+                sustained_secs: 5 * 60,
+                cooldown_secs: 300,
+            },
+            network: MetricAlertRule {
+                enabled: false,
+                threshold: 500_000_000.0, // 500 MB/s aggregate
+                sustained_secs: 5 * 60,
+                cooldown_secs: 600,
+            },
+            temperature: MetricAlertRule {
+                enabled: false,
+                threshold: 85.0, // °C
+                sustained_secs: 2 * 60,
+                cooldown_secs: 600,
+            },
+            gpu: MetricAlertRule {
+                enabled: false,
+                threshold: 90.0,
+                sustained_secs: 5 * 60,
                 cooldown_secs: 300,
             },
             load_threshold: 4.0,
@@ -213,14 +252,22 @@ pub struct AlertState {
     pub cpu_alerted: bool,
     pub memory_alerted: bool,
     pub load_alerted: bool,
+    pub network_alerted: bool,
     /// Per-mount-point disk alert state (keyed by mount_point string)
     pub disk_alerted: HashMap<String, bool>,
+    /// Per-sensor temperature alert state (keyed by sensor label)
+    pub temperature_alerted: HashMap<String, bool>,
+    /// Per-GPU alert state (keyed by GPU name or index)
+    pub gpu_alerted: HashMap<String, bool>,
     pub last_offline_alert: Option<Instant>,
     pub last_recovery_alert: Option<Instant>,
     pub last_cpu_alert: Option<Instant>,
     pub last_memory_alert: Option<Instant>,
     pub last_load_alert: Option<Instant>,
     pub last_disk_alert: Option<Instant>,
+    pub last_network_alert: Option<Instant>,
+    pub last_temperature_alert: Option<Instant>,
+    pub last_gpu_alert: Option<Instant>,
     pub port_alerted: HashMap<u16, Instant>,
 }
 
@@ -231,13 +278,19 @@ impl AlertState {
             cpu_alerted: false,
             memory_alerted: false,
             load_alerted: false,
+            network_alerted: false,
             disk_alerted: HashMap::new(),
+            temperature_alerted: HashMap::new(),
+            gpu_alerted: HashMap::new(),
             last_offline_alert: None,
             last_recovery_alert: None,
             last_cpu_alert: None,
             last_memory_alert: None,
             last_load_alert: None,
             last_disk_alert: None,
+            last_network_alert: None,
+            last_temperature_alert: None,
+            last_gpu_alert: None,
             port_alerted: HashMap::new(),
         }
     }
