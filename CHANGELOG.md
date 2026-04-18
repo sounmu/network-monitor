@@ -5,7 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [0.3.4] — 2026-04-18
+## [0.3.5] — 2026-04-18
+
+Hotfix for a visual regression introduced with the v0.3.4 `<PageHeader>` rollout. **v0.3.4 is marked as a pre-release on GitHub and should not be deployed — use v0.3.5 instead.** No server / DB / API surface changes relative to v0.3.4; pure CSS fix on the web tier.
+
+### Fixed
+
+- **PageHeader font silently dropped to the system sans-serif stack** on every top-level page (overview / agents / alerts / monitors / status). Root cause: the new `.page-header__*` rules used the CSS `font:` shorthand with a typescale token that nested `var(--font-inter)`; the double-substitution runs into IACVT (Invalid At Computed Value Time) rules in the browser and the whole `font:` declaration silently gets dropped, so every header fell back to the system `sans-serif` stack and visually "lost its font". Replaced the shorthand in `.page-header__title` / `.page-header__badge` / `.page-header__desc` / `.page-header__stats` with explicit `font-size` + `font-weight` + `line-height` + `letter-spacing` declarations so Inter is inherited from `<body>` normally.
+- **Header title weight restored** — DESIGN.md §2.2 prescribes `headline-small` at 400 weight, but the rest of the app still runs 22/800 inline h1s, so the M3-compliant 400 weight looked underweight next to surrounding content. Page header title now uses 20 px / 700 / letter-spacing -0.2 px, keeping the M3 size but restoring the visual hierarchy the app expects. The deviation is logged in the CSS comment so a future whole-app M3 pass can re-align.
+
+## [0.3.4] — 2026-04-18 *(pre-release)*
 
 Alerts-page revamp driven by a side-by-side comparison with Beszel + a strict M3 migration of the visual surface. The scraper now evaluates load / network / temperature / gpu rules end-to-end, a shared page header and M3 button primitives roll out across every top-level route, and a cluster of React 19 correctness fixes (`useSyncExternalStore` snapshot caching, 429 toast handling, purity-friendly `Date.now()` pattern) lands alongside the UI work.
 

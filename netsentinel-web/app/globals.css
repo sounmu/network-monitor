@@ -635,18 +635,27 @@ body {
   flex-shrink: 0;
 }
 .page-header__title {
-  font: var(--md-sys-typescale-headline-medium);
+  /* Explicit font-size + weight + line-height so the element inherits
+     the Inter font-family from <body>. Using the `font:` shorthand with
+     a nested `var(--font-inter)` fails Invalid-At-Computed-Value-Time
+     substitution and silently drops the custom font — symptoms: title
+     renders in the system sans-serif stack instead of Inter. */
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.3;
+  letter-spacing: -0.2px;
   color: var(--md-sys-color-on-surface);
   margin: 0;
 }
 .page-header__badge {
   display: inline-flex;
   align-items: center;
-  font: var(--md-sys-typescale-label-medium);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1rem;
+  letter-spacing: 0.3px;
   /* Background is an on-surface 8% state layer, so the content itself
-     uses `on-surface` (not the variant) to keep WCAG contrast well
-     above 4.5:1 and to match the surface-context the state layer was
-     derived from. */
+     uses `on-surface` to keep WCAG contrast well above 4.5:1. */
   color: var(--md-sys-color-on-surface);
   background: color-mix(in srgb, var(--md-sys-color-on-surface) 8%, transparent);
   padding: 2px var(--md-sys-spacing-sm);
@@ -660,7 +669,9 @@ body {
 }
 .page-header__desc {
   margin: var(--md-sys-spacing-xs) 0 0 0;
-  font: var(--md-sys-typescale-body-medium);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.4;
   color: var(--md-sys-color-on-surface-variant);
 }
 .page-header--align-center .page-header__row {
@@ -673,7 +684,8 @@ body {
   display: inline-flex;
   align-items: center;
   gap: var(--md-sys-spacing-md);
-  font: var(--md-sys-typescale-label-medium);
+  font-size: 12px;
+  font-weight: 500;
   color: var(--md-sys-color-on-surface-variant);
 }
 .page-header__stats-item {
