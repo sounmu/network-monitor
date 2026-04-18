@@ -732,17 +732,21 @@ body {
   flex-shrink: 0;
 }
 
-/* ── Toggle Switch (M3) ───────────────────────────
-   Sizing uses border-box so the 2px outline never pushes the thumb out
-   of the track. The thumb is vertically centered via `top: 50%` +
-   translateY(-50%), so growing it from 16px (off) to 24px (on) animates
-   symmetrically instead of drifting to the top edge. `left` drives the
-   horizontal slide so transform can stay dedicated to vertical centering.
+/* ── Toggle Switch (Material Design 3) ────────────
+   Track: 52×32 with a 2px outline in the off state, filled with primary
+   in the on state. Thumb grows from 16dp (off) → 24dp (on) → 28dp
+   (pressed) exactly as the M3 spec prescribes — the extra visual weight
+   is what conveys the "active" feel. To stop the growth from looking
+   like the thumb is inflating rightward, we anchor the thumb's CENTER
+   at the `left` coordinate via translate(-50%, -50%) and animate the
+   center point from 14px (off) to 34px (on). That way the thumb slides
+   smoothly and grows symmetrically around its own center instead of
+   from the left edge outward.
    ─────────────────────────────────────────────── */
 .switch {
   width: 52px;
   height: 32px;
-  background: var(--bg-muted);
+  background: transparent;
   border: 2px solid var(--text-muted);
   border-radius: var(--md-sys-shape-corner-full);
   position: relative;
@@ -754,11 +758,31 @@ body {
               border-color var(--md-sys-motion-medium1) var(--md-sys-motion-easing-standard);
 }
 
+.switch:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text-primary) 8%, transparent);
+}
+
+.switch:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 2px;
+}
+
 .switch[aria-checked="true"] {
   background: var(--accent-blue);
   border-color: var(--accent-blue);
 }
 
+.switch[aria-checked="true"]:hover:not(:disabled) {
+  background: var(--accent-blue);
+  filter: brightness(1.08);
+}
+
+.switch:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+}
+
+/* Off-state thumb — small outline-colored circle, centered at x=14 */
 .switch::after {
   content: "";
   position: absolute;
@@ -767,20 +791,27 @@ body {
   border-radius: 50%;
   background: var(--text-muted);
   top: 50%;
-  left: 6px;
-  transform: translateY(-50%);
+  left: 14px;
+  transform: translate(-50%, -50%);
   transition: left var(--md-sys-motion-medium1) var(--md-sys-motion-easing-standard),
               width var(--md-sys-motion-medium1) var(--md-sys-motion-easing-standard),
               height var(--md-sys-motion-medium1) var(--md-sys-motion-easing-standard),
               background var(--md-sys-motion-medium1) var(--md-sys-motion-easing-standard);
-  box-shadow: 0 1px 2px color-mix(in srgb, var(--md-sys-color-shadow, #000) 18%, transparent);
 }
 
+/* On-state thumb — full-size on-primary circle, centered at x=34 */
 .switch[aria-checked="true"]::after {
   width: 24px;
   height: 24px;
-  left: 22px;
+  left: 34px;
   background: var(--text-on-accent, #fff);
+  box-shadow: 0 1px 2px color-mix(in srgb, #000 25%, transparent);
+}
+
+/* Pressed state — thumb briefly grows to 28dp per M3 spec */
+.switch:active:not(:disabled)::after {
+  width: 28px;
+  height: 28px;
 }
 
 /* ── Responsive ─── */
