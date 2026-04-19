@@ -14,25 +14,24 @@ import { formatNetworkSpeed } from "@/app/lib/formatters";
 import { PageHeader } from "@/app/components/PageHeader";
 
 /**
- * Column-header labels stay in the primary on-surface color for a clean
- * scannable grid. Metric values + their inline-meter bars share the
- * accent-green fill so a glance tells you "running" without the rainbow
- * of per-metric hues the overview previously used.
+ * Column-header labels + numeric values stay in the primary on-surface
+ * color for maximum readability. Only the inline-meter BAR carries the
+ * accent-green fill so a glance tells you "running" without the
+ * rainbow of per-metric hues the overview previously used.
  */
 const HEADER_COLOR = "var(--text-primary)";
-const METRIC_VALUE_COLOR = "var(--accent-green)";
+const METRIC_VALUE_COLOR = "var(--text-primary)";
+const METRIC_BAR_COLOR = "var(--accent-green)";
 
 function InlineMeter({ value, max = 100 }: { value: number; max?: number }) {
   const pct = Math.min(Math.max((value / max) * 100, 0), 100);
   return (
     <div className="inline-meter">
-      <span className="inline-meter-value" style={{ color: METRIC_VALUE_COLOR }}>
-        {pct.toFixed(1)}%
-      </span>
+      <span className="inline-meter-value">{pct.toFixed(1)}%</span>
       <span className="inline-meter-bar">
         <span
           className="inline-meter-fill"
-          style={{ width: `${pct}%`, background: METRIC_VALUE_COLOR }}
+          style={{ width: `${pct}%`, background: METRIC_BAR_COLOR }}
         />
       </span>
     </div>
@@ -240,10 +239,10 @@ export default function HomePage() {
                         {offline ? dash : (
                           <span
                             style={{
-                              fontSize: 12,
-                              fontFamily: "var(--font-mono), monospace",
+                              fontSize: 13,
                               fontWeight: 600,
                               color: METRIC_VALUE_COLOR,
+                              fontVariantNumeric: "tabular-nums",
                             }}
                           >
                             {host.load.toFixed(2)}
@@ -254,10 +253,10 @@ export default function HomePage() {
                         {offline ? dash : (
                           <span
                             style={{
-                              fontSize: 12,
-                              fontFamily: "var(--font-mono), monospace",
+                              fontSize: 13,
                               color: METRIC_VALUE_COLOR,
                               fontWeight: 600,
+                              fontVariantNumeric: "tabular-nums",
                             }}
                           >
                             {formatNetworkSpeed(host.networkRx)}
@@ -268,10 +267,10 @@ export default function HomePage() {
                         {offline ? dash : (
                           <span
                             style={{
-                              fontSize: 12,
-                              fontFamily: "var(--font-mono), monospace",
+                              fontSize: 13,
                               color: METRIC_VALUE_COLOR,
                               fontWeight: 600,
+                              fontVariantNumeric: "tabular-nums",
                             }}
                           >
                             {formatNetworkSpeed(host.networkTx)}

@@ -849,14 +849,17 @@ body {
 .inline-meter-value {
   /* Left-aligned so the "50.0%" value sits on the same x coordinate as
      its column header ("CPU", "Memory" …), keeping a clean vertical
-     reading column even as values change width. */
-  min-width: 48px;
-  font-size: 12px;
-  font-family: var(--font-mono), monospace;
+     reading column even as values change width.
+     Uses Inter (inherited from <body>) + tabular-nums rather than
+     JetBrains Mono — the mono face reads "techy/thin" at 13 px next
+     to sans-serif headers; tabular-nums keeps digits aligned without
+     committing to a monospace stack. */
+  min-width: 52px;
+  font-size: 13px;
   font-weight: 600;
+  color: var(--text-primary);
   flex-shrink: 0;
   text-align: left;
-  letter-spacing: -0.1px;
   font-variant-numeric: tabular-nums;
 }
 
