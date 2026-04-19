@@ -64,29 +64,59 @@ netsentinel/
 
 ---
 
-## Quick Start — 3 steps, ≈ 10 minutes
+## Quick Start
 
-> Prerequisites: Docker + Docker Compose v2, `openssl`, `curl`, `jq`.
-> Tested on Linux and macOS. Windows users should use WSL2.
+### Install the hub (one line)
+
+On the machine that will run the dashboard + API:
 
 ```bash
-# 1. Clone and bootstrap (generates .env with random JWT_SECRET + DB password)
-git clone https://github.com/sounmu/netsentinel.git
-cd netsentinel
-./scripts/bootstrap.sh
-
-# 2. Start the stack (builds and runs a single container for API + dashboard)
-docker compose up -d --build
-
-# 3. Verify (5 checks — exits non-zero with an actionable hint on any failure)
-./scripts/smoke-test.sh
+curl -sL https://raw.githubusercontent.com/sounmu/netsentinel/main/scripts/install-hub.sh | bash
 ```
 
-When step 3 prints `Summary: 5 passed, 0 failed`, open <http://localhost:3000/setup> to create the first admin account.
+It clones the repo into `~/netsentinel`, generates `.env` with random secrets, runs `docker compose up -d --build`, verifies the install with a 5-check smoke test, and prints the URL + the JWT_SECRET you'll need for the agent step below.
 
-**What happens next** — add a host from the UI, install the agent on the target machine, watch live metrics flow in. Full walk-through in [`docs/AFTER_INSTALL.md`](docs/AFTER_INSTALL.md).
+Prerequisites: Docker + Compose v2, `git`, `curl`, `openssl`. Tested on Linux and macOS; Windows users should run this inside WSL2.
 
-If any step fails, run `./scripts/doctor.sh` — it checks tooling, env values, port availability, container health, and the `/api/health` endpoint, and prints the exact next command for each broken check.
+### Install an agent on every monitored host (one line)
+
+On each target machine, paste the JWT_SECRET the hub printed:
+
+```bash
+curl -sL https://raw.githubusercontent.com/sounmu/netsentinel/main/scripts/install-agent.sh \
+  | sudo bash -s -- --jwt-secret "PASTE_THE_HUB_SECRET_HERE"
+```
+
+The installer builds the agent binary, drops a systemd unit (Linux) or launchd daemon (macOS), starts the service, and prints the exact `host_key` you should paste into the hub's Agents page.
+
+> The agent currently builds from source via `cargo install` — if the target machine does not have Rust, the installer prints the one-line rustup command to run first. Phase B will publish prebuilt binaries via GitHub Releases so this step becomes a pure download.
+
+### Register the host in the UI
+
+1. Open `http://<hub-ip>:3000/setup` → create the first admin account.
+2. Navigate to **Agents → + Add Agent** and paste the `host_key` the agent installer printed (for example `192.168.1.10:9101`).
+3. The host flips from `pending` → `online` within one scrape interval (default 10 s).
+
+Full walkthrough with troubleshooting: [`docs/AFTER_INSTALL.md`](docs/AFTER_INSTALL.md).
+
+### If something goes wrong
+
+```bash
+cd ~/netsentinel
+./scripts/doctor.sh        # laddered diagnosis, tells you the exact recovery command
+```
+
+### Offline / air-gapped install
+
+When the one-liner can't reach GitHub (corporate proxy, offline lab, etc.), run the same three steps by hand:
+
+```bash
+git clone https://github.com/sounmu/netsentinel.git
+cd netsentinel
+./scripts/bootstrap.sh            # generates .env
+docker compose up -d --build
+./scripts/smoke-test.sh
+```
 
 ---
 

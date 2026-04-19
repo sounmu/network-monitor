@@ -66,51 +66,66 @@ Hit **Save** → the host shows up in `/agents` immediately with status **`pendi
 
 ---
 
-## Step 4 — Install and start the agent on the target machine (5 minutes)
+## Step 4 — Install the agent on the target machine (~2 minutes)
 
-The agent is a single Rust binary. Build and run it on whatever machine you want to monitor.
-
-### 4.1 Copy the shared JWT secret
-
-From the server's `.env`:
+NetSentinel ships a one-liner agent installer. On the machine you want to monitor, paste:
 
 ```bash
+curl -sL https://raw.githubusercontent.com/sounmu/netsentinel/main/scripts/install-agent.sh \
+  | sudo bash -s -- --jwt-secret "PASTE_THE_JWT_SECRET_HERE"
+```
+
+Read back the shared secret from the hub's `.env`:
+
+```bash
+# on the hub
 grep ^JWT_SECRET= .env | cut -d= -f2-
 ```
 
-Keep that value handy.
+The installer:
 
-### 4.2 On the target machine
+1. Checks for `cargo` (prints the rustup install command if missing).
+2. Builds `netsentinel-agent` via `cargo install --git` into `/usr/local/bin`.
+3. Writes `/etc/netsentinel/agent.env` with the JWT + port (chmod 600).
+4. Drops `/etc/systemd/system/netsentinel-agent.service` (Linux) or `/Library/LaunchDaemons/dev.netsentinel.agent.plist` (macOS), enables and starts it.
+5. Prints the exact `host_key` — `<lan-ip>:9101` — you should paste into the hub UI.
+
+Optional flags:
 
 ```bash
-# clone once if the repo isn't already there
+--port 9102            # non-default listen port
+--bind 192.168.1.10    # only bind to a specific interface
+--prefix /opt          # binary goes to /opt/bin instead of /usr/local/bin
+--ref v0.3.5           # build a specific tag / branch
+--uninstall            # stop + remove service, binary, and /etc/netsentinel/
+```
+
+### 4.1 Confirm the server picks up the agent
+
+Back in the hub UI, the `Agents` row flips from `pending` → `online` within one scrape cycle. Live metrics land on the Overview dashboard and `/host/?key=<host_key>`.
+
+### 4.2 If it stays `pending`
+
+| Symptom | Fix |
+|---|---|
+| Agent service keeps restarting | `sudo journalctl -u netsentinel-agent --since '1 min ago'` — look for JWT / bind errors |
+| Agent is up (port listens) but hub says `pending` | `docker compose exec server curl -v http://<host>:<port>/metrics` from the hub — if curl times out, open the firewall on the agent host |
+| Hub logs say `401` / `403` | JWT_SECRET mismatch — recopy the hub's `.env` value into `/etc/netsentinel/agent.env` then `sudo systemctl restart netsentinel-agent` |
+| Hub logs say `bincode decode error` | Agent built from a ref more than one minor release away from the hub. Rebuild one side: re-run the installer with matching `--ref` |
+
+### 4.3 Offline alternative (no curl|bash)
+
+If the target host can't reach GitHub, clone and build manually:
+
+```bash
 git clone https://github.com/sounmu/netsentinel.git
 cd netsentinel/netsentinel-agent
-
-cp .env.example .env
-# Edit .env:
-#   JWT_SECRET=<same value you copied from the server>
-#   AGENT_PORT=9101       # or anything free on this machine
-
+cp .env.example .env          # set JWT_SECRET + AGENT_PORT
 cargo build --release
 ./target/release/netsentinel-agent
 ```
 
-You should see:
-
-```
-[INFO] netsentinel-agent 0.3.x listening on 0.0.0.0:9101
-```
-
-### 4.3 Confirm the server picks it up
-
-Within one `scrape_interval_secs` cycle, the host on the `/agents` page flips `pending` → `online`, and live metrics start flowing into `/` (Overview) and `/host/?key=<host_key>`.
-
-If it stays `pending`:
-
-- **401 / 403 in agent logs** → `JWT_SECRET` mismatch. Recopy it from the server's `.env`.
-- **connection refused** → the server container can't reach `host:port`. Try `docker compose exec server curl -v http://<host>:<port>/metrics` and fix routing (LAN IP, firewall, etc.).
-- **bincode decode error** → the server and agent versions are more than one minor apart. Rebuild one of them so the versions match.
+Register the same `<lan-ip>:<AGENT_PORT>` in the hub's Agents page.
 
 ---
 

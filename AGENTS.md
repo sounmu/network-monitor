@@ -246,7 +246,10 @@ See `netsentinel-server/.env.example` for full reference. Key optional vars:
 - `METRICS_CACHE_MAX_ENTRIES` — upper bound on in-memory metrics query cache size (default: `200`). v0.3.0 grew per-sample payload 3–5×, so an unbounded cache risks hundreds of MB under concurrent dashboard load. Oldest-inserted entries evicted once the cap is hit (TTL remains 120 s).
 
 ## Commands
-- **Full Stack (prod)**: `./scripts/bootstrap.sh && docker compose up -d --build && ./scripts/smoke-test.sh`. `bootstrap.sh` writes `.env` with random JWT_SECRET + DB password, compose builds the single-container stack (server + embedded web), `smoke-test.sh` runs 5 checks. After success, open `http://localhost:3000/setup` for the first admin — full post-install flow in `docs/AFTER_INSTALL.md`. Use `./scripts/doctor.sh` to diagnose any failed step.
+- **Full Stack (prod, one-liner)**: `curl -sL https://raw.githubusercontent.com/sounmu/netsentinel/main/scripts/install-hub.sh | bash`. The hub installer clones to `~/netsentinel`, bootstraps secrets, builds+starts the single-container stack, and runs the smoke test. Prints the JWT_SECRET + the one-liner for each agent host at the end.
+- **Full Stack (prod, offline / repo already cloned)**: `./scripts/bootstrap.sh && docker compose up -d --build && ./scripts/smoke-test.sh`. Same result as the one-liner, one step at a time.
+- **Agent install (one-liner, per monitored host)**: `curl -sL .../scripts/install-agent.sh | sudo bash -s -- --jwt-secret "$JWT"`. Builds `netsentinel-agent` via `cargo install --git`, drops a systemd unit or launchd plist, and prints the `host_key` to paste into the hub's Agents UI. Flags: `--port`, `--bind`, `--prefix`, `--ref`, `--uninstall`.
+- After any failure above: `./scripts/doctor.sh` for the hub, `sudo journalctl -u netsentinel-agent` for the agent.
 - **Server deploy**: GitHub Actions CI/CD (PR-triggered lint/test/build + manual deploy via SSH rsync)
 - **Agent**: `cargo build --release` — macOS LaunchDaemon or Linux Docker
 - **Web dev**: `npm run dev` in `netsentinel-web/` (port 3001 with HMR). Run `cargo run` in `netsentinel-server/` on port 3000; set `NEXT_PUBLIC_API_URL=http://localhost:3000` in `netsentinel-web/.env`. The dev loop is identical to the pre-v0.3.6 layout.
