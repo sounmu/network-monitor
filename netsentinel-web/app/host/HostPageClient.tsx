@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { notFound, usePathname, useRouter } from "next/navigation";
+import { notFound, useRouter, useSearchParams } from "next/navigation";
 import { useSSE } from "@/app/lib/sse-context";
 const TimeSeriesChart = dynamic(
   () => import("@/app/components/TimeSeriesChart"),
@@ -26,20 +26,6 @@ import {
   MemoryStick,
 } from "lucide-react";
 import { useI18n } from "@/app/i18n/I18nContext";
-
-/**
- * Extract the live `host_key` from the current pathname instead of reading
- * it from the statically-generated route params. Under `output: 'export'`
- * every `/host/*` URL is served from the single placeholder shell emitted
- * by `generateStaticParams` (see page.tsx), so the build-time params are
- * always `_spa_fallback_`; the only source of truth for the actual host
- * is `window.location`, which `usePathname()` exposes at runtime.
- */
-function useHostKeyFromPath(): string {
-  const pathname = usePathname();
-  const match = pathname.match(/^\/host\/([^/]+)\/?$/);
-  return match ? decodeURIComponent(match[1]) : "";
-}
 
 /** Format uptime from boot_time (Unix timestamp seconds).
  *  <24h → "Xh Xm", ≥24h → "Xd Xh" */
@@ -87,7 +73,8 @@ function SectionCard({
 }
 
 export default function HostPageClient() {
-  const decodedHostKey = useHostKeyFromPath();
+  const searchParams = useSearchParams();
+  const decodedHostKey = searchParams.get("key") ?? "";
   const router = useRouter();
 
   const { metricsMap, statusMap, isConnected } = useSSE();
@@ -108,7 +95,7 @@ export default function HostPageClient() {
     ? getHostStatus(latestTimestamp, isOnline, statusData?.scrape_interval_secs)
     : "pending";
 
-  if (isConnected && !hasData && !(decodedHostKey in statusMap)) {
+  if (decodedHostKey && isConnected && !hasData && !(decodedHostKey in statusMap)) {
     notFound();
   }
 

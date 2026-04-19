@@ -209,7 +209,7 @@ export default function HomePage() {
                               }}
                             >
                               <Link
-                                href={`/host/${encodeURIComponent(host.host_key)}`}
+                                href={`/host/?key=${encodeURIComponent(host.host_key)}`}
                                 style={{ color: "inherit", textDecoration: "none" }}
                               >
                                 {host.display_name}

@@ -10,10 +10,10 @@ import type { NextConfig } from "next";
  * The export config (`output`, `trailingSlash`, `images.unoptimized`) is
  * applied **only** when `next build` runs (NODE_ENV === 'production').
  * Under `next dev` the flags stay off, so the dev server still supports
- * dynamic routes without pre-declared `generateStaticParams` — the
- * /host/[host_key] page works with any host_key during dev. The
- * placeholder `_spa_fallback_` param only matters at build time, where
- * it emits the single SPA shell that Axum rewrites every /host/* to.
+ * App Router features normally. Host detail no longer depends on a
+ * dynamic segment: the static `/host/index.html` shell reads
+ * `?key=<host_key>` at runtime via `useSearchParams()`, which avoids the
+ * export-time placeholder/fallback dance entirely.
  *
  * `trailingSlash: true` makes every route emit `{route}/index.html`, the
  * layout `tower-http::ServeDir` maps to naturally.

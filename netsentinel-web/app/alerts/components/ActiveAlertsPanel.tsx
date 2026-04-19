@@ -82,7 +82,7 @@ export function ActiveAlertsPanel({ onCountChange }: Props) {
               <div className="alerts-active-card__actions">
                 <Link
                   className="alerts-btn alerts-btn--sm alerts-btn--tonal"
-                  href={`/host/${encodeURIComponent(alert.host_key)}`}
+                  href={`/host/?key=${encodeURIComponent(alert.host_key)}`}
                 >
                   <ArrowRight size={12} aria-hidden="true" />
                   {t.alerts.active.viewHost}

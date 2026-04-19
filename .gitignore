@@ -33,3 +33,5 @@ node_modules/
 
 docs/
 scripts/
+!netsentinel-web/scripts/
+!netsentinel-web/scripts/export-start.mjs

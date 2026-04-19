@@ -172,4 +172,18 @@ jobs:
               docker compose -f ~/netsentinel/docker-compose.yml logs --tail=30 server
               exit 1
             fi
+
+            if ! curl -sf http://localhost:3000/ > /dev/null 2>&1; then
+              echo "❌ Web root check failed"
+              docker compose -f ~/netsentinel/docker-compose.yml logs --tail=30 server
+              exit 1
+            fi
+            echo "✅ Web root check passed"
+
+            if ! curl -sf "http://localhost:3000/host/?key=test-host:9101" > /dev/null 2>&1; then
+              echo "❌ /host page check failed"
+              docker compose -f ~/netsentinel/docker-compose.yml logs --tail=30 server
+              exit 1
+            fi
+            echo "✅ /host page check passed"
           EOF

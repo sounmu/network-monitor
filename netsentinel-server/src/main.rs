@@ -382,15 +382,7 @@ async fn main() -> anyhow::Result<()> {
     };
     let compression = tower_http::compression::CompressionLayer::new();
 
-    let app = metrics_routes::create_router(Arc::clone(&state))
-        .layer(middleware::map_response(add_api_version_header))
-        .layer(middleware::from_fn(request_id::request_id))
-        .layer(middleware::from_fn_with_state(
-            Arc::clone(&state),
-            request_id::api_rate_limit,
-        ))
-        .layer(cors)
-        .layer(compression);
+    let app = metrics_routes::create_router(Arc::clone(&state));
 
     // Mount the pre-built web static bundle when STATIC_ASSETS_DIR points
     // at it. In production this is the single container's /app/static,
@@ -413,7 +405,15 @@ async fn main() -> anyhow::Result<()> {
     } else {
         tracing::info!("📦 [Web] STATIC_ASSETS_DIR unset — API-only mode (expected in dev)");
         app
-    };
+    }
+    .layer(middleware::map_response(add_api_version_header))
+    .layer(middleware::from_fn(request_id::request_id))
+    .layer(middleware::from_fn_with_state(
+        Arc::clone(&state),
+        request_id::api_rate_limit,
+    ))
+    .layer(cors)
+    .layer(compression);
 
     // ── Start background scraper tasks ──
     let scraper_handle = services::scraper::start_scraper(Arc::clone(&state));

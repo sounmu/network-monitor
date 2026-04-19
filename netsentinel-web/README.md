@@ -12,7 +12,7 @@ npm run dev             # http://localhost:3001
 
 ## Tech Stack
 
-- **Next.js 16** (App Router, standalone output)
+- **Next.js 16** (App Router, `output: 'export'`)
 - **Recharts** — time-series charts
 - **SWR** — data fetching with 5s polling
 - **SSE** — real-time host status via EventSource
@@ -30,7 +30,8 @@ npm run dev             # http://localhost:3001
 ```
 app/
 ├── page.tsx                 # Overview dashboard
-├── host/[host_key]/page.tsx # Host detail view
+├── host/page.tsx            # Host detail shell (`/host/?key=<host_key>`)
+├── host/HostPageClient.tsx  # Client-side host detail resolver
 ├── agents/page.tsx          # Agent management
 ├── alerts/page.tsx          # Alert configuration
 ├── components/              # Shared UI components
@@ -38,5 +39,7 @@ app/
 ├── lib/                     # API client, SSE context
 └── types/                   # TypeScript types
 ```
+
+Canonical host detail links use `/host?key=<host_key>`. The page is a static shell and reads the active host from `useSearchParams()` at runtime.
 
 See the [root README](../README.md) for full project documentation.

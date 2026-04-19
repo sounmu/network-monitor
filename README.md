@@ -40,6 +40,8 @@ graph LR
 
 From v0.3.6 the Next.js web tier is compiled to a static export and served directly by Axum via `tower-http::ServeDir`, so production runs in a **single container**. The old separate `web` container + its ~35 MB Node runtime is gone. Local development is unchanged — `npm run dev` still spins up the Next.js dev server on port 3001 with HMR.
 
+**Frontend route contract:** the host detail page is now the static route `/host/?key=<host_key>`. Because the bundle is exported as plain HTML with `trailingSlash: true`, the canonical URL keeps the trailing slash and the `host_key` is passed as a query parameter — resolved client-side via `useSearchParams()` instead of being encoded as a dynamic path segment.
+
 **Data flow:**
 1. Server schedules each registered agent by that host's `scrape_interval_secs` (10 s by default), batch-inserts metrics in a single query
 2. Metrics stored in TimescaleDB hypertable (90-day retention) + 5-min continuous aggregate for fast long-range queries
@@ -230,6 +232,10 @@ All endpoints require `Authorization: Bearer <JWT>` unless noted. Read endpoints
 | `POST` | `/api/auth/sse-ticket` | Mint single-use ticket for SSE |
 | `POST` | `/api/admin/users/{id}/revoke-sessions` | Admin: force-revoke user sessions |
 | `GET` | `/api/stream?key=<ticket>` | SSE stream (`metrics` + `status`) |
+
+Frontend permalink contract:
+- Host detail: `/host/?key=<host_key>`
+- Example: `/host/?key=192.168.1.10:9101`
 
 ---
 

@@ -103,6 +103,8 @@ npm run dev                   # starts on http://localhost:3001 with HMR
 
 The dev server still runs Next.js normally (HMR, fast refresh, dynamic routes). The `output: 'export'` + Axum-embed layout only applies to the production Docker image — `npm run dev` is untouched.
 
+Host detail URLs are now part of the static-export contract: use `/host/?key=<host_key>` (trailing slash intentional — `trailingSlash: true` is set for production export) rather than `/host/<host_key>`. The latter may still be served by a generic fallback in local tooling, but it is not the canonical frontend route anymore.
+
 Useful commands:
 
 ```bash

@@ -8,7 +8,7 @@
   "scripts": {
     "dev": "next dev -p 3001",
     "build": "next build",
-    "start": "next start",
+    "start": "node scripts/export-start.mjs",
     "lint": "eslint",
     "test": "vitest run"
   },
