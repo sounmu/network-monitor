@@ -35,15 +35,18 @@ Thank you for your interest in contributing! This document covers everything you
 git clone https://github.com/<owner>/netsentinel.git
 cd netsentinel
 
-# 2. Copy environment template and fill in your values
-cp .env.example .env
+# 2. Generate .env with random secrets (JWT_SECRET + Postgres password)
+./scripts/bootstrap.sh
 
-# 3. Start the full stack (PostgreSQL + TimescaleDB + single server container
-#    that serves both the API and the web static bundle)
+# 3. Start the full stack (single server container serves both API and
+#    the embedded web static bundle)
 docker compose up -d --build
+
+# 4. Verify the install
+./scripts/smoke-test.sh
 ```
 
-The web dashboard **and** the API share **http://localhost:3000**. The old `:3001` was the separate Node.js web container, which v0.3.6 folded into the Rust server.
+The dashboard **and** the API share **http://localhost:3000**. Open `/setup` for the first-admin flow — `docs/AFTER_INSTALL.md` walks through the full 10-minute path (admin → first host → first agent). Use `./scripts/doctor.sh` if anything above fails.
 
 ---
 

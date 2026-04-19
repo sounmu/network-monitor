@@ -64,77 +64,61 @@ netsentinel/
 
 ---
 
-## Quick Start
+## Quick Start — 3 steps, ≈ 10 minutes
 
-### Prerequisites
-- Docker & Docker Compose
-- A [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) token (optional — remove the `tunnel` service for local-only use)
-
-### 1. Clone the repository
+> Prerequisites: Docker + Docker Compose v2, `openssl`, `curl`, `jq`.
+> Tested on Linux and macOS. Windows users should use WSL2.
 
 ```bash
+# 1. Clone and bootstrap (generates .env with random JWT_SECRET + DB password)
 git clone https://github.com/sounmu/netsentinel.git
 cd netsentinel
-```
+./scripts/bootstrap.sh
 
-### 2. Configure environment
-
-```bash
-cp .env.example .env
-cp netsentinel-server/.env.example netsentinel-server/.env
-```
-
-Edit both `.env` files and fill in:
-- `POSTGRES_PASSWORD` — strong password for PostgreSQL
-- `JWT_SECRET` — 32+ byte random hex (`openssl rand -hex 32`)
-- `CLOUDFLARE_TUNNEL_TOKEN` — from Cloudflare Zero Trust dashboard
-
-### 3. Create the shared Docker network
-
-```bash
-docker network create shared-network
-```
-
-### 4. Start the stack
-
-```bash
+# 2. Start the stack (builds and runs a single container for API + dashboard)
 docker compose up -d --build
+
+# 3. Verify (5 checks — exits non-zero with an actionable hint on any failure)
+./scripts/smoke-test.sh
 ```
 
-The dashboard **and** the API share one origin — `http://localhost:3000` (or your Cloudflare Tunnel domain). The old `:3001` port is no longer exposed.
+When step 3 prints `Summary: 5 passed, 0 failed`, open <http://localhost:3000/setup> to create the first admin account.
+
+**What happens next** — add a host from the UI, install the agent on the target machine, watch live metrics flow in. Full walk-through in [`docs/AFTER_INSTALL.md`](docs/AFTER_INSTALL.md).
+
+If any step fails, run `./scripts/doctor.sh` — it checks tooling, env values, port availability, container health, and the `/api/health` endpoint, and prints the exact next command for each broken check.
 
 ---
 
-## Running Without Docker (Development)
+## Running without Docker (development only)
 
-### Server
+Use this path when you are actively changing code. For production homelab installs, the Quick Start above is faster and safer.
+
+### Server (port 3000)
 
 ```bash
 cd netsentinel-server
-cp .env.example .env  # fill in values
+cp .env.example .env   # set JWT_SECRET (and DATABASE_URL for a local Postgres)
 cargo run
-# Runs on http://0.0.0.0:3000 by default
 ```
 
-### Web Dashboard
+### Web dashboard (port 3001, HMR)
 
 ```bash
 cd netsentinel-web
-cp .env.example .env  # set NEXT_PUBLIC_API_URL=http://localhost:3000
+cp .env.example .env.local   # NEXT_PUBLIC_API_URL=http://localhost:3000
 npm install
 npm run dev
-# Runs on http://localhost:3001 with HMR, talking to the API on :3000
 ```
 
-For dev the Next.js dev server handles routing / HMR / fast refresh exactly as before — the static-export + embedded-in-Axum layout only kicks in when the production image is built via `docker compose up -d --build`.
+`npm run dev` runs the full Next.js dev server — dynamic routes, fast refresh, everything. The `output: 'export'` + Axum-embed layout only kicks in when the production image is built.
 
-### Agent
+### Agent (port 9101)
 
 ```bash
 cd netsentinel-agent
-cp .env.example .env  # fill in JWT_SECRET matching the server
+cp .env.example .env   # JWT_SECRET must match the server
 cargo run
-# Listens on http://0.0.0.0:9101 by default
 ```
 
 ---
@@ -146,18 +130,20 @@ cargo run
 | Variable | Required | Default | Description |
 |---|---|---|---|
 | `POSTGRES_USER` | No | `postgres` | DB username |
-| `POSTGRES_PASSWORD` | **Yes** | — | DB password |
-| `POSTGRES_DB` | No | `postgres` | DB name (use `postgres` for fresh installs; legacy deployments may still hold data in a differently-named DB) |
-| `CLOUDFLARE_TUNNEL_TOKEN` | No | — | Cloudflare Tunnel token |
-| `NEXT_PUBLIC_API_URL` | No | `http://localhost:3000` | Backend URL the **browser** fetches from. **Must** match an entry in the server's `ALLOWED_ORIGINS` verbatim (scheme + host + port, no trailing slash). Baked into the web bundle at build time — changes require `docker compose up -d --build web`. In Cloudflare-Tunnel deployments omit the `:3000` port (the tunnel exposes 443 only). |
+| `POSTGRES_PASSWORD` | **Yes** | — | DB password. `./scripts/bootstrap.sh` generates a random one; override only if you already have a managed Postgres elsewhere. |
+| `POSTGRES_DB` | No | `netsentinel` | DB name. Fresh installs use `netsentinel`; pre-v0.3.6 deployments may still use `network_monitor` — keep the old value if you are upgrading in place. |
+| `JWT_SECRET` | **Yes** | — | HS256 secret (≥ 32 chars). Every agent needs the same value. `bootstrap.sh` generates it via `openssl rand -hex 32`. |
+| `CLOUDFLARE_TUNNEL_TOKEN` | No | — | Cloudflare Tunnel token. Only read when you activate the `tunnel` service via a compose override — see [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md). |
+| `NEXT_PUBLIC_API_URL` | No | empty (same-origin) | Backend URL the **browser** fetches from. Empty = same-origin, correct for localhost and single-hostname reverse proxies. Override only when the dashboard and API live on different hostnames — see [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md). Baked into the web bundle at build time; changing this value requires `docker compose up -d --build server`. |
 
-### Server `netsentinel-server/.env`
+### Server — all keys below
+
+Under Docker Compose the server reads **root `.env`** (via `env_file: .env` in `docker-compose.yml`). `netsentinel-server/.env` is only consulted by a local `cargo run`. So add these keys to `./env` for a Docker install, or to `netsentinel-server/.env` for a local dev install — never both.
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `DATABASE_URL` | **Yes** | — | PostgreSQL connection string |
-| `JWT_SECRET` | **Yes** | — | HS256 secret (min 32 chars). `openssl rand -hex 32` |
-| `ALLOWED_ORIGINS` | No | `http://localhost:3001` | Comma-separated CORS origins. Must include (1) the site hosting the dashboard, (2) `NEXT_PUBLIC_API_URL` itself. Origins are byte-matched — no trailing slash, no wildcards (`*` is incompatible with `credentials: "include"`). |
+| `DATABASE_URL` | **Docker: auto** / **local: yes** | — | PostgreSQL connection string. `docker-compose.yml` builds it from `POSTGRES_*` values above — a local `cargo run` has to set it explicitly (`postgres://postgres:…@localhost:5432/netsentinel`). |
+| `ALLOWED_ORIGINS` | No | `http://localhost:3001` | Comma-separated CORS origins. With the single-container layout this mostly only gates third-party embeds; split-origin deployments must list both hostnames — see [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md). No trailing slash, no `*`. |
 | `SERVER_HOST` | No | `0.0.0.0` | Bind address |
 | `SERVER_PORT` | No | `3000` | Bind port |
 | `SCRAPE_INTERVAL_SECS` | No | `10` | Fallback scrape interval if a host row has no valid `scrape_interval_secs`; normal scheduling is per-host |
