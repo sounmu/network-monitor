@@ -43,6 +43,8 @@ scripts/*
 !scripts/bootstrap.sh
 !scripts/smoke-test.sh
 !scripts/doctor.sh
+!scripts/install-hub.sh
+!scripts/install-agent.sh
 
 # netsentinel-web has its own scripts/ folder used by npm start
 # (export-start.mjs is the production static preview server).
