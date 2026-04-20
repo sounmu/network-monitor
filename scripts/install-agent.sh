@@ -4,7 +4,7 @@
 #
 # Pipes cleanly from curl + bash. Typical usage, on a fresh host:
 #
-#     curl -sL https://raw.githubusercontent.com/sounmu/netsentinel/main/scripts/install-agent.sh \
+#     curl -fsSL https://raw.githubusercontent.com/sounmu/netsentinel/main/scripts/install-agent.sh \
 #       | sudo bash -s -- --jwt-secret "$JWT"
 #
 # The agent is pull-scraped by the hub, so the install does NOT need
@@ -60,11 +60,11 @@ Options:
   --help
 
 On a host where $JWT is already exported in the env:
-  curl -sL .../install-agent.sh | sudo -E bash -s -- \
+  curl -fsSL .../install-agent.sh | sudo -E bash -s -- \
     --jwt-secret "$JWT" --bind 0.0.0.0 --port 9101 --ref main
 
 Tailscale-only exposure example:
-  curl -sL .../install-agent.sh | sudo -E bash -s -- \
+  curl -fsSL .../install-agent.sh | sudo -E bash -s -- \
     --jwt-secret "$JWT" --bind 100.x.y.z --port 9101 --ref main
 
 Without sudo, the script can only run as root or will refuse.
@@ -102,7 +102,7 @@ done
 # ── must run as root (systemctl / /usr/local writes) ────────────────
 if [[ $EUID -ne 0 ]]; then
   echo "❌ This installer must run as root (use sudo)." >&2
-  echo "    Example: curl -sL .../install-agent.sh | sudo bash -s -- --jwt-secret XXX" >&2
+  echo "    Example: curl -fsSL .../install-agent.sh | sudo bash -s -- --jwt-secret XXX" >&2
   exit 1
 fi
 

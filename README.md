@@ -72,7 +72,7 @@ netsentinel/
 On the machine that will run the dashboard + API:
 
 ```bash
-curl -sL https://raw.githubusercontent.com/sounmu/netsentinel/main/scripts/install-hub.sh | bash
+curl -fsSL https://raw.githubusercontent.com/sounmu/netsentinel/main/scripts/install-hub.sh | bash
 ```
 
 It clones the repo into `~/netsentinel`, generates `.env` with random secrets, runs `docker compose up -d --build`, verifies the install with a 5-check smoke test, and prints the URL + the JWT_SECRET you'll need for the agent step below.
@@ -84,7 +84,7 @@ Prerequisites: Docker + Compose v2, `git`, `curl`, `openssl`. Tested on Linux an
 On each target machine, paste the JWT_SECRET the hub printed:
 
 ```bash
-curl -sL https://raw.githubusercontent.com/sounmu/netsentinel/main/scripts/install-agent.sh \
+curl -fsSL https://raw.githubusercontent.com/sounmu/netsentinel/main/scripts/install-agent.sh \
   | sudo bash -s -- \
       --jwt-secret "PASTE_THE_HUB_SECRET_HERE" \
       --bind "0.0.0.0" \

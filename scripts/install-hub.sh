@@ -4,7 +4,7 @@
 #
 # Spins up the full stack on a fresh Linux box. Typical usage:
 #
-#     curl -sL https://raw.githubusercontent.com/sounmu/netsentinel/main/scripts/install-hub.sh | bash
+#     curl -fsSL https://raw.githubusercontent.com/sounmu/netsentinel/main/scripts/install-hub.sh | bash
 #
 # Steps, in order:
 #   1. Verify Docker + Compose v2 are available.
@@ -98,7 +98,7 @@ cat <<EOM
     2. On every machine you want to monitor, run the one-liner agent
        installer (replace the trailing secret with the value below):
 
-       curl -sL https://raw.githubusercontent.com/sounmu/netsentinel/${REF}/scripts/install-agent.sh \\
+       curl -fsSL https://raw.githubusercontent.com/sounmu/netsentinel/${REF}/scripts/install-agent.sh \\
          | sudo bash -s -- --jwt-secret "${jwt}"
 
        The agent will print the host_key to paste into the hub's

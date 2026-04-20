@@ -79,7 +79,7 @@ Hit **Save** → the host shows up in `/agents` immediately with status **`pendi
 NetSentinel ships a one-liner agent installer. On the machine you want to monitor, paste:
 
 ```bash
-curl -sL https://raw.githubusercontent.com/sounmu/netsentinel/main/scripts/install-agent.sh \
+curl -fsSL https://raw.githubusercontent.com/sounmu/netsentinel/main/scripts/install-agent.sh \
   | sudo bash -s -- --jwt-secret "PASTE_THE_JWT_SECRET_HERE"
 ```
 
@@ -87,7 +87,7 @@ Common variants:
 
 ```bash
 # Default: listen on every interface, port 9101.
-curl -sL https://raw.githubusercontent.com/sounmu/netsentinel/main/scripts/install-agent.sh \
+curl -fsSL https://raw.githubusercontent.com/sounmu/netsentinel/main/scripts/install-agent.sh \
   | sudo bash -s -- \
       --jwt-secret "PASTE_THE_JWT_SECRET_HERE" \
       --bind "0.0.0.0" \
@@ -95,7 +95,7 @@ curl -sL https://raw.githubusercontent.com/sounmu/netsentinel/main/scripts/insta
       --ref main
 
 # Tailscale-only exposure: register 100.x.y.z:9101 in the hub.
-curl -sL https://raw.githubusercontent.com/sounmu/netsentinel/main/scripts/install-agent.sh \
+curl -fsSL https://raw.githubusercontent.com/sounmu/netsentinel/main/scripts/install-agent.sh \
   | sudo bash -s -- \
       --jwt-secret "PASTE_THE_JWT_SECRET_HERE" \
       --bind "100.x.y.z" \
@@ -103,7 +103,7 @@ curl -sL https://raw.githubusercontent.com/sounmu/netsentinel/main/scripts/insta
       --ref main
 
 # Custom port: register <agent-ip>:9200 in the hub.
-curl -sL https://raw.githubusercontent.com/sounmu/netsentinel/main/scripts/install-agent.sh \
+curl -fsSL https://raw.githubusercontent.com/sounmu/netsentinel/main/scripts/install-agent.sh \
   | sudo bash -s -- \
       --jwt-secret "PASTE_THE_JWT_SECRET_HERE" \
       --bind "0.0.0.0" \
@@ -142,7 +142,7 @@ To update an installed native agent, re-run the installer with the same
 `/etc/netsentinel/agent.env` are replaced, then the service is restarted:
 
 ```bash
-curl -sL https://raw.githubusercontent.com/sounmu/netsentinel/main/scripts/install-agent.sh \
+curl -fsSL https://raw.githubusercontent.com/sounmu/netsentinel/main/scripts/install-agent.sh \
   | sudo bash -s -- \
       --jwt-secret "PASTE_THE_JWT_SECRET_HERE" \
       --bind "0.0.0.0" \
