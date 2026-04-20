@@ -182,8 +182,7 @@ export function SSEProvider({ children }: { children: React.ReactNode }) {
 
       if (unmounted) return;
 
-      const apiBase =
-        process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3000";
+      const apiBase = process.env.NEXT_PUBLIC_API_URL ?? "";
       // The ticket is opaque, short-lived, and single-use — safe to carry as
       // a query parameter. Never put the long-lived JWT on the URL.
       const url = `${apiBase}/api/stream?key=${encodeURIComponent(ticket)}`;

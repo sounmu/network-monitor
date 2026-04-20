@@ -7,6 +7,8 @@ import {
   getAccessToken,
 } from "./api";
 
+const TEST_ORIGIN = "https://dashboard.example.test";
+
 // ──────────────────────────────────────────────
 // getMetricsRangeUrl
 // ──────────────────────────────────────────────
@@ -18,7 +20,7 @@ describe("getMetricsRangeUrl", () => {
     const end = new Date("2025-01-15T11:00:00.000Z");
     const url = getMetricsRangeUrl("host1", start, end);
 
-    const parsed = new URL(url);
+    const parsed = new URL(url, TEST_ORIGIN);
     const startParam = parsed.searchParams.get("start")!;
     expect(startParam).toBe("2025-01-15T10:05:00.000Z");
   });
@@ -29,7 +31,7 @@ describe("getMetricsRangeUrl", () => {
     const end = new Date("2025-01-15T11:05:30.500Z");
     const url = getMetricsRangeUrl("host1", start, end);
 
-    const parsed = new URL(url);
+    const parsed = new URL(url, TEST_ORIGIN);
     const endParam = parsed.searchParams.get("end")!;
     expect(endParam).toBe("2025-01-15T11:06:00.000Z");
   });
@@ -39,7 +41,7 @@ describe("getMetricsRangeUrl", () => {
     const end = new Date("2025-01-15T11:00:00.000Z");
     const url = getMetricsRangeUrl("host1", start, end);
 
-    const parsed = new URL(url);
+    const parsed = new URL(url, TEST_ORIGIN);
     expect(parsed.searchParams.get("start")).toBe("2025-01-15T10:00:00.000Z");
     expect(parsed.searchParams.get("end")).toBe("2025-01-15T11:00:00.000Z");
   });
@@ -61,8 +63,8 @@ describe("getMetricsRangeUrl", () => {
     const url2 = getMetricsRangeUrl("host1", start2, end);
 
     // Both should floor to 10:05:00
-    const parsed1 = new URL(url1);
-    const parsed2 = new URL(url2);
+    const parsed1 = new URL(url1, TEST_ORIGIN);
+    const parsed2 = new URL(url2, TEST_ORIGIN);
     expect(parsed1.searchParams.get("start")).toBe(parsed2.searchParams.get("start"));
   });
 });
@@ -72,22 +74,20 @@ describe("getMetricsRangeUrl", () => {
 // ──────────────────────────────────────────────
 
 describe("getMetricsUrl", () => {
-  const API_BASE = "http://localhost:3000";
-
   it("returns correct URL with plain host key", () => {
-    expect(getMetricsUrl("myhost")).toBe(`${API_BASE}/api/metrics/myhost`);
+    expect(getMetricsUrl("myhost")).toBe("/api/metrics/myhost");
   });
 
   it("encodes special characters in host key", () => {
     const url = getMetricsUrl("192.168.1.10:9101");
-    expect(url).toBe(`${API_BASE}/api/metrics/${encodeURIComponent("192.168.1.10:9101")}`);
+    expect(url).toBe(`/api/metrics/${encodeURIComponent("192.168.1.10:9101")}`);
   });
 
   it("encodes slashes in host key", () => {
     const url = getMetricsUrl("host/with/slashes");
     expect(url).toContain(encodeURIComponent("host/with/slashes"));
     // Should NOT have unencoded slashes after /metrics/
-    expect(url).toBe(`${API_BASE}/api/metrics/${encodeURIComponent("host/with/slashes")}`);
+    expect(url).toBe(`/api/metrics/${encodeURIComponent("host/with/slashes")}`);
   });
 });
 

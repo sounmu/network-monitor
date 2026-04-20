@@ -16,6 +16,8 @@ services:
         # API and dashboard live on different hostnames.
         - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-}
     restart: unless-stopped
+    networks:
+      - shared-network
     logging:
       driver: json-file
       options:
@@ -50,3 +52,7 @@ services:
         limits:
           cpus: "2.0"
           memory: 1G
+
+networks:
+  shared-network:
+    external: true

@@ -1,9 +1,9 @@
 import { MetricsRow } from "@/app/types/metrics";
 
-// Default to localhost (not 127.0.0.1) so the browser treats the frontend
-// (localhost:3001) and API (localhost:3000) as same-site. This is required
-// for SameSite=Strict cookies to be sent on fetch requests.
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
+// Empty/undefined means same-origin. That is the production default because
+// the static dashboard is served by the Axum container itself; local Next dev
+// should set NEXT_PUBLIC_API_URL=http://localhost:3000 in .env.local.
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "";
 
 // ── Access token (memory-only) ──────────────────────────────────────────
 // The short-lived access JWT lives only in a module-level variable and the
