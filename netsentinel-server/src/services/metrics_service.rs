@@ -1,5 +1,6 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use chrono::{SecondsFormat, Utc};
@@ -18,6 +19,29 @@ const HISTORY_RETENTION_SECS: u64 = 10 * 60;
 /// Minimum interval between periodic forced status SSE broadcasts (2 minutes).
 /// Used by both `process_metrics` (online path) and `handle_down` (offline path).
 pub const STATUS_PERIODIC_INTERVAL_SECS: u64 = 120;
+
+static LEGACY_FALLBACK_TOTAL: AtomicU64 = AtomicU64::new(0);
+
+pub(crate) fn record_legacy_fallback_used() {
+    LEGACY_FALLBACK_TOTAL.fetch_add(1, Ordering::Relaxed);
+}
+
+pub(crate) fn legacy_fallback_total() -> u64 {
+    LEGACY_FALLBACK_TOTAL.load(Ordering::Relaxed)
+}
+
+/// Replace NaN / +/-Infinity / negative values with 0.0.
+/// Rate, percentage, and temperature metrics are non-negative by physical
+/// meaning, so negative inputs are treated as sensor glitches.
+#[inline]
+pub(crate) fn sanitize_f64(v: f64) -> f64 {
+    if v.is_finite() && v >= 0.0 { v } else { 0.0 }
+}
+
+#[inline]
+pub(crate) fn sanitize_f32(v: f32) -> f32 {
+    if v.is_finite() && v >= 0.0 { v } else { 0.0 }
+}
 
 /// Type-safe alert result enum.
 /// Uses pattern matching instead of string matching for state transitions,
@@ -525,11 +549,15 @@ fn compute_network_rate(
         NetworkRate {
             rx_bytes_per_sec: network.rx_bytes_per_sec,
             tx_bytes_per_sec: network.tx_bytes_per_sec,
+            total_rx_bytes: network.total_rx_bytes,
+            total_tx_bytes: network.total_tx_bytes,
         }
     } else {
         NetworkRate {
             rx_bytes_per_sec: rx_fallback,
             tx_bytes_per_sec: tx_fallback,
+            total_rx_bytes: network.total_rx_bytes,
+            total_tx_bytes: network.total_tx_bytes,
         }
     }
 }
@@ -1051,6 +1079,21 @@ mod tests {
     use crate::models::app_state::{AlertConfig, AlertMetricPoint, HostRecord, MetricAlertRule};
 
     const TEST_HOSTNAME: &str = "test-host";
+
+    #[test]
+    fn sanitize_f64_nan_zero_inf_neg() {
+        assert_eq!(sanitize_f64(f64::NAN), 0.0);
+        assert_eq!(sanitize_f64(f64::NEG_INFINITY), 0.0);
+        assert_eq!(sanitize_f64(f64::INFINITY), 0.0);
+        assert_eq!(sanitize_f64(-1.5), 0.0);
+        assert_eq!(sanitize_f64(1.5), 1.5);
+
+        assert_eq!(sanitize_f32(f32::NAN), 0.0);
+        assert_eq!(sanitize_f32(f32::NEG_INFINITY), 0.0);
+        assert_eq!(sanitize_f32(f32::INFINITY), 0.0);
+        assert_eq!(sanitize_f32(-1.5), 0.0);
+        assert_eq!(sanitize_f32(1.5), 1.5);
+    }
 
     fn make_metrics(load: f64, cpu: f32, ports: Vec<PortStatus>) -> AgentMetrics {
         AgentMetrics {
@@ -1770,6 +1813,8 @@ mod tests {
         let rate = NetworkRate {
             rx_bytes_per_sec: 80.0,
             tx_bytes_per_sec: 80.0,
+            total_rx_bytes: 0,
+            total_tx_bytes: 0,
         };
         let mut actions = Vec::new();
         collect_network_alerts(&record, TEST_HOSTNAME, &rule, &rate, &mut actions);
@@ -1784,6 +1829,8 @@ mod tests {
         let rate = NetworkRate {
             rx_bytes_per_sec: 10.0,
             tx_bytes_per_sec: 10.0,
+            total_rx_bytes: 0,
+            total_tx_bytes: 0,
         };
         let mut actions = Vec::new();
         collect_network_alerts(&record, TEST_HOSTNAME, &rule, &rate, &mut actions);
@@ -1798,6 +1845,8 @@ mod tests {
         let rate = NetworkRate {
             rx_bytes_per_sec: 10.0,
             tx_bytes_per_sec: 10.0,
+            total_rx_bytes: 0,
+            total_tx_bytes: 0,
         };
         let mut actions = Vec::new();
         collect_network_alerts(&record, TEST_HOSTNAME, &rule, &rate, &mut actions);

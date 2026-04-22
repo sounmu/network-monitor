@@ -21,13 +21,14 @@ pub struct AppState {
     pub store: SharedStore,
     /// Shared HTTP client reused for alert notifications and any future external API calls
     pub http_client: reqwest::Client,
-    /// Database connection pool. Concrete type is resolved at build
-    /// time by the `backend-postgres` / `backend-sqlite` Cargo feature
-    /// flags (see `crate::db::DbPool`). The repo layer still expects
-    /// `&PgPool` directly today — that conversion is Phase 3 work.
+    /// Database connection pool. NetSentinel is SQLite-only; the alias
+    /// keeps downstream modules from importing sqlx internals directly.
     pub db_pool: crate::db::DbPool,
     /// Global scrape interval in seconds (from env var or default 10)
     pub scrape_interval_secs: u64,
+    /// Configured sqlx pool size, used by fan-out handlers to avoid
+    /// out-concurrencying the SQLite connection pool.
+    pub max_db_connections: u32,
     /// SSE event broadcast channel sender
     pub sse_tx: broadcast::Sender<SseBroadcast>,
     /// Cache of the most recently sent per-host status payload.
@@ -442,7 +443,13 @@ impl LoginRateLimiter {
     pub fn check(&self, ip: &str) -> Result<(), u64> {
         let mut map = match self.attempts.write() {
             Ok(m) => m,
-            Err(_) => return Ok(()), // On lock poisoning, allow the attempt
+            Err(_) => {
+                tracing::error!(
+                    limiter = std::any::type_name::<Self>(),
+                    "Rate limiter lock poisoned; failing closed"
+                );
+                return Err(self.window.as_secs().max(1));
+            }
         };
         let now = Instant::now();
         let entry = map.entry(ip.to_string()).or_insert_with(VecDeque::new);
@@ -523,6 +530,22 @@ mod tests {
         assert!(limiter.check("10.0.0.2").is_ok());
         // First IP is now blocked
         assert!(limiter.check("10.0.0.1").is_err());
+    }
+
+    #[test]
+    fn rate_limiter_fails_closed_on_poison() {
+        let limiter = Arc::new(LoginRateLimiter::new(10, Duration::from_secs(60)));
+        let limiter_for_thread = Arc::clone(&limiter);
+
+        let _ = std::thread::spawn(move || {
+            let _guard = limiter_for_thread.attempts.write().unwrap();
+            panic!("poison rate limiter lock");
+        })
+        .join();
+
+        let result = limiter.check("10.0.0.1");
+        assert!(result.is_err(), "poisoned limiter must reject requests");
+        assert_eq!(result.unwrap_err(), 60);
     }
 
     #[test]

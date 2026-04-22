@@ -14,6 +14,10 @@ use crate::models::agent_metrics::{
 pub struct NetworkRate {
     pub rx_bytes_per_sec: f64,
     pub tx_bytes_per_sec: f64,
+    /// Cumulative counters mirrored from the agent's NetworkTotal so live
+    /// SSE rows match the REST MetricsRow.networks shape.
+    pub total_rx_bytes: u64,
+    pub total_tx_bytes: u64,
 }
 
 /// Per-interface network throughput (bytes/sec), computed server-side as a delta.
