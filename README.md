@@ -68,7 +68,7 @@ The production hub is a **single container**: Axum serves both `/api/*` and the 
 **Data flow:**
 1. Server schedules each registered agent by that host's `scrape_interval_secs` (10 s by default), batch-inserts metrics in a single query
 2. Raw metrics stored in SQLite (3-day retention) + a 5-min rollup table (90-day retention) maintained by an in-process `rollup_worker` running on a 60-second tick. A daily `retention_worker` prunes each time-series table past its window.
-3. Browser loads the static bundle from the same origin as the API, then connects to the SSE stream for real-time updates (in-memory — no DB hit, rAF-batched). SSE `metrics` event includes CPU, memory, load, network, disks, temperatures, and Docker stats for live chart overlay; long-lived streams are cut when the session is revoked
+3. Browser loads the static bundle from the same origin as the API, then connects to the SSE stream for real-time updates (in-memory — no DB hit, rAF-batched). SSE `metrics` event includes CPU, memory, load, network rate + cumulative counters, disks, temperatures, and Docker stats for live chart overlay; long-lived streams are cut when the session is revoked
 4. REST API with automatic downsampling: ≤6h raw, 6h-14d 5-min rollup, >14d 15-min re-aggregation
 5. Alerts delivered to Discord, Slack, and/or Email channels
 
@@ -205,9 +205,12 @@ Under Docker Compose the server reads **root `.env`** (via `env_file: .env` in `
 | `SERVER_PORT` | No | `3000` | Bind port |
 | `SCRAPE_INTERVAL_SECS` | No | `10` | Fallback scrape interval if a host row has no valid `scrape_interval_secs`; normal scheduling is per-host |
 | `MAX_DB_CONNECTIONS` | No | `10` | sqlx connection pool size. SQLite serialises writes via a single writer lock, so values beyond ~10 provide no throughput gain and only grow idle pool memory. |
-| `SSE_BUFFER_SIZE` | No | `128` | SSE broadcast channel buffer |
+| `SSE_BUFFER_SIZE` | No | `128` | SSE broadcast channel buffer; floor is 128, so env can raise but not lower it |
 | `TRUSTED_PROXY_COUNT` | No | `0` | Reverse proxy count for X-Forwarded-For (0 = use peer IP directly) |
-| `METRICS_CACHE_MAX_ENTRIES` | No | `200` | Max in-memory query-cache entries (oldest-inserted evicted when full; TTL 120 s) |
+| `METRICS_CACHE_MAX_ENTRIES` | No | `20` | Max in-memory query-cache entries (oldest-inserted evicted when full; TTL 120 s) |
+| `SQLITE_MMAP_SIZE` | No | `67108864` | SQLite mmap size in bytes (default 64 MiB) |
+| `SQLITE_CACHE_SIZE_KB` | No | `8192` | SQLite page cache size in KiB (default 8 MiB; applied as negative `cache_size`) |
+| `SQLITE_TEMP_STORE` | No | `MEMORY` | SQLite temp storage mode: `DEFAULT`, `FILE`, or `MEMORY` |
 | `COOKIE_SECURE` | No | `true` | Whether the refresh cookie carries the `Secure` flag. Leave enabled in production; set `false` only for local plain-HTTP development. |
 | `METRICS_TOKEN` | No | — | Bearer token for `/metrics` (Prometheus). When set, every scrape must send `Authorization: Bearer <token>`. |
 | `ALLOW_UNAUTHENTICATED_METRICS` | No | `false` | Explicit opt-in to leave `/metrics` open when `METRICS_TOKEN` is unset. |
@@ -288,8 +291,8 @@ All tables live in a single SQLite file (`data/netsentinel.db`, WAL mode, STRICT
 
 | Table | Description |
 |---|---|
-| **`metrics`** | Raw scrape rows. 3-day retention. Stores CPU, memory, load, network, disk, process, temperature, GPU, Docker, port data as JSON text columns. |
-| **`metrics_5min`** | 5-minute rollup table (`STRICT, WITHOUT ROWID`, PK `(host_key, bucket)`). Populated by `services::rollup_worker` on a 60-second tick via an idempotent UPSERT from `metrics`. 90-day retention. |
+| **`metrics`** | Raw scrape rows. 3-day retention. Stores CPU, memory, load, network, disk, process, temperature, GPU, Docker, port data as JSON text columns, plus nullable scalar `rx_bytes_per_sec` / `tx_bytes_per_sec` projections for bandwidth rollups. |
+| **`metrics_5min`** | 5-minute rollup table (`STRICT, WITHOUT ROWID`, PK `(host_key, bucket)`). Populated by `services::rollup_worker` on a 60-second tick via an idempotent UPSERT from `metrics`; includes cumulative network counters and bucket-averaged bandwidth scalar columns. 90-day retention. |
 | **`hosts`** | Agent registry (scrape interval, thresholds, monitored ports/containers, system info: OS/CPU/RAM/IP). `ports` / `containers` stored as JSON arrays in TEXT columns. |
 | **`alert_configs`** | Alert rules; `NULL host_key` = global default, per-host rows override. `UNIQUE NULLS NOT DISTINCT` is emulated with an expression-based UNIQUE INDEX on `(coalesce(host_key, ''), metric_type, coalesce(sub_key, ''))`. |
 | **`notification_channels`** | Alert delivery targets (Discord webhook, Slack webhook, Email SMTP). Config stored as JSON text. |

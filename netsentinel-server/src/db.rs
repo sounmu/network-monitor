@@ -28,6 +28,32 @@ pub async fn connect(
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use std::str::FromStr;
 
+    // Env-configurable SQLite pragmas — operators can tune per-host.
+    // Defaults target mid-tier Raspberry Pi / small VPS:
+    //   - mmap_size    64 MiB (SQLITE_MMAP_SIZE,     bytes)
+    //   - cache_size   8 MiB  (SQLITE_CACHE_SIZE_KB, KiB; SQLite pragma takes negative = KiB)
+    //   - temp_store   MEMORY (SQLITE_TEMP_STORE: DEFAULT | FILE | MEMORY)
+    // Raise mmap_size / cache_size for hosts with more RAM; temp_store=MEMORY
+    // avoids disk spill for long-range queries (>14d window).
+    let mmap_size = std::env::var("SQLITE_MMAP_SIZE")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(67_108_864);
+    let cache_size_kib = std::env::var("SQLITE_CACHE_SIZE_KB")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(8_192);
+    let temp_store = std::env::var("SQLITE_TEMP_STORE")
+        .ok()
+        .and_then(|v| {
+            let upper = v.to_ascii_uppercase();
+            match upper.as_str() {
+                "DEFAULT" | "FILE" | "MEMORY" => Some(upper),
+                _ => None,
+            }
+        })
+        .unwrap_or_else(|| "MEMORY".to_string());
+
     let connect_options = SqliteConnectOptions::from_str(database_url)
         .context("Invalid DATABASE_URL — SQLite expects `sqlite://path` or `sqlite::memory:`")?
         .create_if_missing(true)
@@ -35,10 +61,9 @@ pub async fn connect(
         .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
         .synchronous(sqlx::sqlite::SqliteSynchronous::Normal)
         .busy_timeout(std::time::Duration::from_secs(5))
-        // 256 MiB mmap, 64 MiB page cache — see §3.
-        .pragma("mmap_size", "67108864")
-        .pragma("cache_size", "-8192")
-        .pragma("temp_store", "FILE")
+        .pragma("mmap_size", mmap_size.to_string())
+        .pragma("cache_size", format!("-{cache_size_kib}"))
+        .pragma("temp_store", temp_store)
         .pragma("wal_autocheckpoint", "1000");
 
     let pool = SqlitePoolOptions::new()

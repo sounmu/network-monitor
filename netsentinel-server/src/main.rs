@@ -88,11 +88,8 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or(4);
 
     // ── Database connection pool ──
-    // Backend is selected at build time via Cargo feature flags
-    // (`backend-postgres` default, `backend-sqlite` experimental).
-    // `crate::db` is the single seam that knows which driver to load
-    // and which migrations directory to run — main.rs stays backend-
-    // agnostic. See docs/SQLITE_MIGRATION.md §6.
+    // SQLite is the single embedded backend. `crate::db` owns the pool
+    // setup and migration runner so the startup path stays compact.
     let statement_timeout_secs: u64 = std::env::var("DB_STATEMENT_TIMEOUT_SECS")
         .unwrap_or_else(|_| "30".to_string())
         .parse()
@@ -124,10 +121,13 @@ async fn main() -> anyhow::Result<()> {
             0
         }
     };
+    // Floor is 128 — empirically the point where a single Lagged event
+    // resync (re-snapshotting last_known_status) stays under 100 ms for
+    // host counts we expect to support. Env can raise but not lower.
     let env_buffer: usize = std::env::var("SSE_BUFFER_SIZE")
         .ok()
         .and_then(|v| v.parse().ok())
-        .unwrap_or(0);
+        .unwrap_or(128);
     let auto_buffer = (host_count as usize) * 3;
     let sse_buffer = env_buffer.max(auto_buffer).max(128);
     tracing::info!(sse_buffer, host_count, "📡 [SSE] Broadcast channel sized");
@@ -137,13 +137,13 @@ async fn main() -> anyhow::Result<()> {
     // Cap the query cache size. v0.3.0 multiplied per-sample payload size by
     // adding per-core CPU, per-interface network, and per-container docker_stats
     // JSONB — an unbounded cache here was the primary driver of the v0.3.x
-    // RSS regression observed in production. 200 entries ≈ a few hundred MB
-    // worst case and is generous for typical dashboard usage (a handful of
-    // hosts × a few range presets × a few concurrent viewers).
+    // RSS regression observed in production. 20 entries covers a handful of
+    // concurrent dashboard widget range presets; raise via env for heavy
+    // multi-user setups.
     let metrics_cache_max_entries: usize = std::env::var("METRICS_CACHE_MAX_ENTRIES")
         .ok()
         .and_then(|v| v.parse().ok())
-        .unwrap_or(10);
+        .unwrap_or(20);
     let metrics_query_cache = Arc::new(models::app_state::MetricsQueryCache::new(
         std::time::Duration::from_secs(120),
         metrics_cache_max_entries,
@@ -175,6 +175,7 @@ async fn main() -> anyhow::Result<()> {
         http_client: reqwest::Client::new(),
         db_pool,
         scrape_interval_secs,
+        max_db_connections,
         sse_tx,
         last_known_status: Arc::new(RwLock::new(HashMap::new())),
         metrics_query_cache: metrics_query_cache.clone(),

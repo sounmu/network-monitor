@@ -167,6 +167,8 @@ touch netsentinel-server/migrations/006_your_change.sql
 # 4. Migrations are embedded at compile time via sqlx::migrate!()
 ```
 
+For new time-series metrics, keep raw and rollup storage in sync: add nullable raw columns for write-time scalar projections when they avoid repeated JSON parsing, update the batch insert path, update `metrics_5min` aggregation, and update every branch of `fetch_metrics_range`.
+
 ### Web unit tests
 
 ```bash
@@ -246,6 +248,7 @@ sudo systemctl restart netsentinel-agent   # or launchctl on macOS
 4. A maintainer will review within a few days. Feedback may be requested before merging.
 
 > **Breaking changes**: If your PR modifies the SSE payload schema or REST API contracts, note it clearly in the PR description so consumers can prepare.
+> Server and frontend SSE type changes must ship in the same commit so the static web bundle never decodes a different wire shape than the server emits.
 > Update `README.md`, `CONTRIBUTING.md`, and any relevant `.env.example` files whenever config defaults, auth behavior, or API/SSE contracts change.
 
 ---
