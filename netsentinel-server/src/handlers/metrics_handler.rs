@@ -174,8 +174,8 @@ pub struct BatchMetricsRequest {
 
 /// POST /api/metrics/batch — fetch metrics for multiple hosts in a single request.
 ///
-/// SP-03: Uses `buffer_unordered(5)` instead of `join_all` to cap concurrent DB
-/// queries at half the default pool size, preventing pool exhaustion.
+/// SP-03: Uses `buffer_unordered(pool_size - 1)` instead of `join_all` to cap
+/// concurrent DB queries and leave room for scrape-cycle writes.
 /// SP-04: Returns `Arc<Vec>` to avoid cloning cached data.
 pub async fn batch_metrics(
     _auth: UserGuard,
@@ -204,6 +204,10 @@ pub async fn batch_metrics(
     let end = req.end;
     let host_keys = req.host_keys;
     let num_keys = host_keys.len();
+    // SQLite has exactly one writer; keep one pool slot out of this read
+    // fan-out so scrape-cycle batch INSERTs are less likely to starve.
+    // Floor at 1 so tiny pools still make forward progress.
+    let fanout = state.max_db_connections.saturating_sub(1).max(1) as usize;
 
     let results: Vec<_> = stream::iter(host_keys.into_iter().map(|hk| {
         let pool = pool.clone();
@@ -219,7 +223,7 @@ pub async fn batch_metrics(
             Ok::<_, AppError>((hk, rows))
         }
     }))
-    .buffer_unordered(5)
+    .buffer_unordered(fanout)
     .collect()
     .await;
 
@@ -381,6 +385,12 @@ pub async fn prometheus_metrics(
     output.push_str("# TYPE netmonitor_load_5min gauge\n");
     output.push_str("# HELP netmonitor_load_15min Load average (15 minutes).\n");
     output.push_str("# TYPE netmonitor_load_15min gauge\n");
+    output.push_str("# HELP netmonitor_legacy_fallback_total Agent bincode payloads decoded via the legacy compatibility path.\n");
+    output.push_str("# TYPE netmonitor_legacy_fallback_total counter\n");
+    output.push_str(&format!(
+        "netmonitor_legacy_fallback_total {}\n",
+        crate::services::metrics_service::legacy_fallback_total()
+    ));
 
     for row in &status_snapshot {
         let labels = format!(
