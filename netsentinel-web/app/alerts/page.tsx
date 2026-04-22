@@ -21,6 +21,8 @@ import { RulesPanel } from "./components/RulesPanel";
 import { HistoryPanel } from "./components/HistoryPanel";
 import { ChannelsPanel } from "./components/ChannelsPanel";
 
+export const dynamic = "force-static";
+
 export default function AlertsPage() {
   return (
     <Suspense

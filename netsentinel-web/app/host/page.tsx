@@ -2,6 +2,8 @@ import { Suspense } from "react";
 
 import HostPageClient from "./HostPageClient";
 
+export const dynamic = "force-static";
+
 /**
  * Host detail is driven by a runtime query parameter (`?key=<host_key>`)
  * instead of a dynamic segment. `output: 'export'` serialises any

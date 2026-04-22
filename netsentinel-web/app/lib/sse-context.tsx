@@ -76,6 +76,7 @@ export function SSEProvider({ children }: { children: React.ReactNode }) {
   const metricsBufRef = useRef<Record<string, HostMetricsPayload>>({});
   const statusBufRef = useRef<Record<string, HostStatusPayload>>({});
   const offlineKeysBufRef = useRef<Set<string>>(new Set());
+  const deletedTombstoneRef = useRef<Map<string, number>>(new Map());
   const rafRef = useRef<number | null>(null);
 
   const flushBuffers = useCallback(() => {
@@ -124,6 +125,7 @@ export function SSEProvider({ children }: { children: React.ReactNode }) {
   const removeHost = useCallback((hostKey: string) => {
     // Drop the host from both user-facing maps and any pending buffered events
     // so a late-arriving SSE frame for the doomed host cannot resurrect it.
+    deletedTombstoneRef.current.set(hostKey, Date.now());
     delete metricsBufRef.current[hostKey];
     delete statusBufRef.current[hostKey];
     offlineKeysBufRef.current.delete(hostKey);
@@ -215,6 +217,13 @@ export function SSEProvider({ children }: { children: React.ReactNode }) {
       es.addEventListener("metrics", (e: MessageEvent) => {
         try {
           const payload: HostMetricsPayload = JSON.parse(e.data);
+          const tombstonedAt = deletedTombstoneRef.current.get(payload.host_key);
+          if (tombstonedAt && Date.now() - tombstonedAt < 5000) {
+            return;
+          }
+          if (tombstonedAt) {
+            deletedTombstoneRef.current.delete(payload.host_key);
+          }
           metricsBufRef.current[payload.host_key] = payload;
           scheduleFlush();
         } catch {
@@ -227,6 +236,13 @@ export function SSEProvider({ children }: { children: React.ReactNode }) {
       es.addEventListener("status", (e: MessageEvent) => {
         try {
           const payload: HostStatusPayload = JSON.parse(e.data);
+          const tombstonedAt = deletedTombstoneRef.current.get(payload.host_key);
+          if (tombstonedAt && Date.now() - tombstonedAt < 5000) {
+            return;
+          }
+          if (tombstonedAt) {
+            deletedTombstoneRef.current.delete(payload.host_key);
+          }
           statusBufRef.current[payload.host_key] = payload;
           if (!payload.is_online) {
             offlineKeysBufRef.current.add(payload.host_key);
