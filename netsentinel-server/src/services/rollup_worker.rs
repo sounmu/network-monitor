@@ -109,10 +109,8 @@ async fn rollup_bucket(pool: &DbPool, bucket_start: i64) -> Result<u64, sqlx::Er
             COUNT(*)         AS sample_count,
             MAX(CAST(json_extract(m.networks, '$.total_rx_bytes') AS INTEGER)) AS total_rx_bytes,
             MAX(CAST(json_extract(m.networks, '$.total_tx_bytes') AS INTEGER)) AS total_tx_bytes,
-            CAST(AVG(CAST(json_extract(m.networks, '$.rx_bytes_per_sec') AS REAL)) AS REAL)
-                AS avg_rx_bytes_per_sec,
-            CAST(AVG(CAST(json_extract(m.networks, '$.tx_bytes_per_sec') AS REAL)) AS REAL)
-                AS avg_tx_bytes_per_sec,
+            CAST(AVG(m.rx_bytes_per_sec) AS REAL) AS avg_rx_bytes_per_sec,
+            CAST(AVG(m.tx_bytes_per_sec) AS REAL) AS avg_tx_bytes_per_sec,
             (SELECT disks FROM metrics
               WHERE host_key = m.host_key
                 AND timestamp >= ?1 AND timestamp < ?2
@@ -224,21 +222,24 @@ mod tests {
                 host_key, display_name, is_online,
                 cpu_usage_percent, memory_usage_percent,
                 load_1min, load_5min, load_15min,
-                networks,
+                networks, rx_bytes_per_sec, tx_bytes_per_sec,
                 disks, temperatures, gpus, docker_stats,
                 timestamp
             )
             VALUES (?1, 'test', ?2, ?3, 0.0, 0.0, 0.0, 0.0, ?4,
+                    ?5, ?6,
                     '[{"name":"/","usage_percent":10}]',
                     '[{"label":"cpu","temperature_c":42}]',
                     '[]', '[]',
-                    ?5)
+                    ?7)
             "#,
         )
         .bind(host)
         .bind(online)
         .bind(cpu)
         .bind(&networks)
+        .bind(rx_bps)
+        .bind(tx_bps)
         .bind(timestamp)
         .execute(pool)
         .await
@@ -292,9 +293,9 @@ mod tests {
 
     #[tokio::test]
     async fn rollup_aggregates_bandwidth_averages() {
-        // `seed_metric` stores `rx_bytes_per_sec = rx` and same for tx.
+        // `seed_metric` stores scalar `rx_bytes_per_sec = rx` and same for tx.
         // With three samples of rx = 100, 300, 500 the expected bucket
-        // average is 300 — this pins the new AVG-over-json_extract path.
+        // average is 300 — this pins the raw scalar-column rollup path.
         let pool = fresh_pool().await;
         let bucket = current_bucket_start(&pool).await;
 

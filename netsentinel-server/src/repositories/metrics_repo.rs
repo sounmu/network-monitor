@@ -147,7 +147,7 @@ struct MetricsRowRaw {
     id: i64,
     host_key: String,
     display_name: String,
-    is_online: bool,
+    is_online: Option<bool>,
     cpu_usage_percent: f32,
     memory_usage_percent: f32,
     load_1min: f32,
@@ -163,6 +163,8 @@ struct MetricsRowRaw {
     cpu_cores: Option<String>,
     network_interfaces: Option<String>,
     docker_stats: Option<String>,
+    rx_bytes_per_sec: Option<f64>,
+    tx_bytes_per_sec: Option<f64>,
     timestamp: DateTime<Utc>,
 }
 
@@ -179,17 +181,27 @@ impl TryFrom<MetricsRowRaw> for MetricsRow {
     type Error = sqlx::Error;
 
     fn try_from(raw: MetricsRowRaw) -> Result<Self, Self::Error> {
+        let mut networks = parse_opt_json(raw.networks)?;
+        if let Some(Value::Object(ref mut map)) = networks {
+            if let Some(rx) = raw.rx_bytes_per_sec {
+                map.insert("rx_bytes_per_sec".to_string(), Value::from(rx));
+            }
+            if let Some(tx) = raw.tx_bytes_per_sec {
+                map.insert("tx_bytes_per_sec".to_string(), Value::from(tx));
+            }
+        }
+
         Ok(Self {
             id: raw.id,
             host_key: raw.host_key,
             display_name: raw.display_name,
-            is_online: raw.is_online,
+            is_online: raw.is_online.unwrap_or(false),
             cpu_usage_percent: raw.cpu_usage_percent,
             memory_usage_percent: raw.memory_usage_percent,
             load_1min: raw.load_1min,
             load_5min: raw.load_5min,
             load_15min: raw.load_15min,
-            networks: parse_opt_json(raw.networks)?,
+            networks,
             docker_containers: parse_opt_json(raw.docker_containers)?,
             ports: parse_opt_json(raw.ports)?,
             disks: parse_opt_json(raw.disks)?,
@@ -222,7 +234,8 @@ pub async fn insert_metrics_batch(
          load_1min, load_5min, load_15min, \
          networks, docker_containers, ports, disks, \
          processes, temperatures, gpus, \
-         cpu_cores, network_interfaces, docker_stats) ",
+         cpu_cores, network_interfaces, docker_stats, \
+         rx_bytes_per_sec, tx_bytes_per_sec) ",
     );
 
     qb.push_values(batch, |mut b, (host_key, metrics)| {
@@ -243,7 +256,9 @@ pub async fn insert_metrics_batch(
             .push_bind(sqlx::types::Json(&metrics.system.gpus))
             .push_bind(sqlx::types::Json(&metrics.cpu_cores))
             .push_bind(sqlx::types::Json(&metrics.network_interfaces))
-            .push_bind(sqlx::types::Json(&metrics.docker_stats));
+            .push_bind(sqlx::types::Json(&metrics.docker_stats))
+            .push_bind(metrics.network.rx_bytes_per_sec)
+            .push_bind(metrics.network.tx_bytes_per_sec);
     });
 
     qb.build().execute(pool).await?;
@@ -263,7 +278,8 @@ pub async fn insert_offline_metrics_batch(
         "INSERT INTO metrics (\
          host_key, display_name, is_online, \
          cpu_usage_percent, memory_usage_percent, \
-         load_1min, load_5min, load_15min) ",
+         load_1min, load_5min, load_15min, \
+         rx_bytes_per_sec, tx_bytes_per_sec) ",
     );
     qb.push_values(batch, |mut b, (host_key, display_name)| {
         b.push_bind(host_key.to_string())
@@ -273,7 +289,9 @@ pub async fn insert_offline_metrics_batch(
             .push_bind(0f32)
             .push_bind(0f32)
             .push_bind(0f32)
-            .push_bind(0f32);
+            .push_bind(0f32)
+            .push_bind(0f64)
+            .push_bind(0f64);
     });
     qb.build().execute(pool).await?;
     Ok(())
@@ -292,6 +310,7 @@ pub async fn fetch_recent_metrics(
                networks, docker_containers, ports, disks,
                processes, temperatures, gpus,
                cpu_cores, network_interfaces, docker_stats,
+               rx_bytes_per_sec, tx_bytes_per_sec,
                timestamp
         FROM metrics
         WHERE host_key = ?1
@@ -341,6 +360,8 @@ pub async fn fetch_metrics_range(
                    NULL AS cpu_cores,
                    NULL AS network_interfaces,
                    docker_stats,
+                   rx_bytes_per_sec,
+                   tx_bytes_per_sec,
                    timestamp
             FROM metrics
             WHERE host_key = ?1
@@ -370,7 +391,7 @@ pub async fn fetch_metrics_range(
                 0 AS id,
                 host_key,
                 '' AS display_name,
-                is_online,
+                CAST(is_online AS INTEGER) AS is_online,
                 cpu_usage_percent,
                 memory_usage_percent,
                 load_1min, load_5min, load_15min,
@@ -387,6 +408,8 @@ pub async fn fetch_metrics_range(
                 NULL AS cpu_cores,
                 NULL AS network_interfaces,
                 docker_stats,
+                NULL AS rx_bytes_per_sec,
+                NULL AS tx_bytes_per_sec,
                 bucket AS timestamp
             FROM metrics_5min
             WHERE host_key = ?1
@@ -444,7 +467,7 @@ pub async fn fetch_metrics_range(
             0 AS id,
             host_key,
             '' AS display_name,
-            MIN(is_online) AS is_online,
+            CAST(MIN(is_online) AS INTEGER) AS is_online,
             CAST(AVG(cpu_usage_percent) AS REAL) AS cpu_usage_percent,
             CAST(AVG(memory_usage_percent) AS REAL) AS memory_usage_percent,
             CAST(AVG(load_1min) AS REAL) AS load_1min,
@@ -463,6 +486,8 @@ pub async fn fetch_metrics_range(
             NULL AS cpu_cores,
             NULL AS network_interfaces,
             MAX(CASE WHEN rn = 1 THEN docker_stats END) AS docker_stats,
+            NULL AS rx_bytes_per_sec,
+            NULL AS tx_bytes_per_sec,
             bucket_15m AS timestamp
         FROM tagged
         GROUP BY host_key, bucket_15m
