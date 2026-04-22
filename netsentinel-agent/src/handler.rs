@@ -4,6 +4,7 @@ use axum::Json;
 use axum::extract::Query;
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
+use bincode::Options as _;
 use chrono::{SecondsFormat, Utc};
 use sysinfo::System;
 
@@ -15,6 +16,13 @@ use crate::sysinfo_collector::collect_sysinfo;
 const AGENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 const MAX_CONTAINER_SELECTORS: usize = 100;
 const MAX_METRICS_PAYLOAD_BYTES: usize = 10 * 1024 * 1024;
+
+fn bincode_options() -> impl bincode::Options {
+    bincode::DefaultOptions::new()
+        .with_limit(MAX_METRICS_PAYLOAD_BYTES as u64)
+        .with_fixint_encoding()
+        .allow_trailing_bytes()
+}
 
 #[tracing::instrument(skip(docker_cache, docker_stats_cache, query))]
 pub(crate) async fn metrics_handler(
@@ -98,7 +106,7 @@ pub(crate) async fn metrics_handler(
     // bincode binary serialisation: ~40–70% smaller payload than JSON, near-zero-copy parsing
     // speed. Both agent and server are Rust, so serde-based binary format field-order
     // compatibility is guaranteed.
-    let bytes = match bincode::serialize(&metrics) {
+    let bytes = match bincode_options().serialize(&metrics) {
         Ok(b) => b,
         Err(e) => {
             tracing::error!(err = ?e, "❌ [Metrics] bincode serialization failed");

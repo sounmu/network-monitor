@@ -179,6 +179,14 @@ pub(crate) struct SysinfoResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bincode::Options as _;
+
+    fn bincode_options() -> impl bincode::Options {
+        bincode::DefaultOptions::new()
+            .with_limit(10 * 1024 * 1024)
+            .with_fixint_encoding()
+            .allow_trailing_bytes()
+    }
 
     #[test]
     fn metrics_query_empty_defaults() {
@@ -321,7 +329,7 @@ mod tests {
             network_interfaces: vec![],
             docker_stats: vec![],
         };
-        let encoded = bincode::serialize(&metrics).unwrap();
+        let encoded = bincode_options().serialize(&metrics).unwrap();
         assert!(!encoded.is_empty());
     }
 }

@@ -103,22 +103,15 @@ fn compute_disk_io(dev_key: &str, usage: &DiskUsage) -> (f64, f64) {
     // at 2× the real value in that degenerate case instead of 1000×+.
     const MIN_ELAPSED_SECS: f64 = 0.5;
 
-    let result = if let Some((prev_r, prev_w, prev_t)) = prev_map.get(dev_key) {
-        let elapsed = now.duration_since(*prev_t).as_secs_f64();
-        if elapsed >= MIN_ELAPSED_SECS {
-            (
-                read_bytes.saturating_sub(*prev_r) as f64 / elapsed,
-                write_bytes.saturating_sub(*prev_w) as f64 / elapsed,
-            )
-        } else {
+    match prev_map.get_mut(dev_key) {
+        Some(prev) => {
+            compute_rate_with_baseline(prev, read_bytes, write_bytes, now, MIN_ELAPSED_SECS)
+        }
+        None => {
+            prev_map.insert(dev_key.to_string(), (read_bytes, write_bytes, now));
             (0.0, 0.0)
         }
-    } else {
-        (0.0, 0.0)
-    };
-
-    prev_map.insert(dev_key.to_string(), (read_bytes, write_bytes, now));
-    result
+    }
 }
 
 /// Compute aggregate network bandwidth (bytes/sec) from the cumulative
@@ -139,22 +132,33 @@ fn compute_network_rate(total_rx: u64, total_tx: u64) -> (f64, f64) {
 
     const MIN_ELAPSED_SECS: f64 = 0.5;
 
-    let result = if let Some((prev_rx, prev_tx, prev_t)) = prev.as_ref() {
-        let elapsed = now.duration_since(*prev_t).as_secs_f64();
-        if elapsed >= MIN_ELAPSED_SECS {
-            (
-                total_rx.saturating_sub(*prev_rx) as f64 / elapsed,
-                total_tx.saturating_sub(*prev_tx) as f64 / elapsed,
-            )
-        } else {
+    match prev.as_mut() {
+        Some(prev) => compute_rate_with_baseline(prev, total_rx, total_tx, now, MIN_ELAPSED_SECS),
+        None => {
+            *prev = Some((total_rx, total_tx, now));
             (0.0, 0.0)
         }
-    } else {
-        (0.0, 0.0)
-    };
+    }
+}
 
-    *prev = Some((total_rx, total_tx, now));
-    result
+fn compute_rate_with_baseline(
+    prev: &mut (u64, u64, Instant),
+    current_a: u64,
+    current_b: u64,
+    now: Instant,
+    min_elapsed_secs: f64,
+) -> (f64, f64) {
+    let elapsed = now.duration_since(prev.2).as_secs_f64();
+    if elapsed < min_elapsed_secs {
+        return (0.0, 0.0);
+    }
+
+    let rate = (
+        current_a.saturating_sub(prev.0) as f64 / elapsed,
+        current_b.saturating_sub(prev.1) as f64 / elapsed,
+    );
+    *prev = (current_a, current_b, now);
+    rate
 }
 
 /// Remove stale entries from the disk I/O delta cache (hot-swapped / unmounted devices).
@@ -466,5 +470,52 @@ mod tests {
     #[test]
     fn physical_interface_wlan0() {
         assert!(is_physical_interface("wlan0"));
+    }
+
+    #[test]
+    fn rate_baseline_first_sample_sets_prev_and_reports_zero() {
+        let start = Instant::now();
+        let mut prev = None;
+
+        let result = match prev.as_mut() {
+            Some(prev) => compute_rate_with_baseline(prev, 100, 50, start, 0.5),
+            None => {
+                prev = Some((100, 50, start));
+                (0.0, 0.0)
+            }
+        };
+
+        assert_eq!(result, (0.0, 0.0));
+        assert_eq!(prev, Some((100, 50, start)));
+    }
+
+    #[test]
+    fn rate_baseline_preserved_when_elapsed_guard_fails() {
+        let start = Instant::now();
+        let mut prev = (100, 50, start);
+
+        let result = compute_rate_with_baseline(
+            &mut prev,
+            200,
+            100,
+            start + Duration::from_millis(100),
+            0.5,
+        );
+
+        assert_eq!(result, (0.0, 0.0));
+        assert_eq!(prev, (100, 50, start));
+    }
+
+    #[test]
+    fn rate_baseline_updates_after_valid_elapsed() {
+        let start = Instant::now();
+        let mut prev = (100, 50, start);
+        let now = start + Duration::from_millis(700);
+
+        let result = compute_rate_with_baseline(&mut prev, 800, 400, now, 0.5);
+
+        assert!((result.0 - 1000.0).abs() < 0.01);
+        assert!((result.1 - 500.0).abs() < 0.01);
+        assert_eq!(prev, (800, 400, now));
     }
 }
