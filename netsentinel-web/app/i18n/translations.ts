@@ -333,8 +333,13 @@ export const translations = {
       operational: "Operational",
       down: "Down",
       uptime7d: "7-day uptime",
+      uptime24h: "24h uptime",
       lastUpdated: "Last updated",
       noHosts: "No monitored services registered yet.",
+      hostsSection: "Hosts",
+      monitorsSection: "External Monitors",
+      disabledTitle: "Public status page is disabled",
+      disabledBody: "Set PUBLIC_STATUS_ENABLED=true on the server to expose this page.",
     },
     // Monitors page
     monitors: {
@@ -707,8 +712,13 @@ export const translations = {
       operational: "정상",
       down: "장애",
       uptime7d: "7일 가동률",
+      uptime24h: "24시간 가동률",
       lastUpdated: "마지막 업데이트",
       noHosts: "등록된 모니터링 대상이 없습니다.",
+      hostsSection: "호스트",
+      monitorsSection: "외부 모니터",
+      disabledTitle: "공개 상태 페이지가 비활성화되어 있습니다",
+      disabledBody: "서버에서 PUBLIC_STATUS_ENABLED=true 환경변수를 설정해 주세요.",
     },
     monitors: {
       title: "외부 모니터",

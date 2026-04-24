@@ -405,6 +405,20 @@ export interface PublicHostStatus {
   uptime_7d: number;
 }
 
+export interface PublicMonitorStatus {
+  monitor_id: number;
+  kind: "http" | "ping";
+  name: string;
+  target: string;
+  is_online: boolean;
+  uptime_24h: number;
+}
+
+export interface PublicStatusResponse {
+  hosts: PublicHostStatus[];
+  monitors: PublicMonitorStatus[];
+}
+
 export const getPublicStatusUrl = () => `${API_BASE}/api/public/status`;
 
 // ── HTTP Monitors ──

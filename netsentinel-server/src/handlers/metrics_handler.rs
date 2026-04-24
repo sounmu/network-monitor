@@ -11,6 +11,7 @@ use serde::Deserialize;
 use crate::errors::AppError;
 use crate::models::app_state::{AppState, MetricsQueryCache};
 use crate::repositories::metrics_repo::{self, MetricsRow, UptimeSummary};
+use crate::repositories::{http_monitors_repo, ping_monitors_repo};
 use crate::services::auth::UserGuard;
 
 /// Optional shared-secret bearer guard for `/metrics`.
@@ -245,39 +246,83 @@ pub struct PublicHostStatus {
     pub uptime_7d: f64,
 }
 
+#[derive(serde::Serialize)]
+pub struct PublicMonitorStatus {
+    pub monitor_id: i32,
+    // `"http"` | `"ping"` — kept as a string in the wire contract so the frontend
+    // can treat both kinds uniformly without enum discriminator bookkeeping.
+    pub kind: &'static str,
+    pub name: String,
+    // For HTTP monitors this is the configured URL; for Ping monitors it is the
+    // `host[:port]` target. Renamed from kind-specific fields so the frontend's
+    // list view can render a single `target` column.
+    pub target: String,
+    pub is_online: bool,
+    pub uptime_24h: f64,
+}
+
+#[derive(serde::Serialize)]
+pub struct PublicStatusResponse {
+    pub hosts: Vec<PublicHostStatus>,
+    pub monitors: Vec<PublicMonitorStatus>,
+}
+
 /// GET /api/public/status — public status page data (no auth)
 ///
 /// **Opt-in**: returns 404 unless `PUBLIC_STATUS_ENABLED=true` is set.
-/// When enabled, emits `host_key` (often an internal IP:port), `display_name`
-/// (OS hostname), and 7-day uptime. That is exactly the surface a Zero-Trust
-/// homelab setup wants to keep private, so the safe default is off — the
-/// endpoint still exists so self-hosters can flip it on when they explicitly
-/// want a public uptime page behind their Cloudflare tunnel.
+/// When enabled, emits agent `host_key` (often an internal IP:port),
+/// `display_name` (OS hostname), 7-day uptime, **and** the list of external
+/// HTTP / Ping monitors with 24-hour uptime. That full surface is exactly what
+/// a Zero-Trust homelab setup wants to keep private, so the safe default is
+/// off — the endpoint still exists so self-hosters can flip it on when they
+/// explicitly want a public status page behind their Cloudflare tunnel.
 ///
-/// Fetches host summaries + 7-day uptime in two queries (not N+1).
+/// Fetches hosts + 7-day uptime + HTTP monitors (list + summaries) + Ping
+/// monitors (list + summaries) in parallel (`tokio::try_join!`), so total
+/// latency is dominated by the slowest single query rather than summed.
 pub async fn public_status(
     State(state): State<Arc<AppState>>,
-) -> Result<Json<Vec<PublicHostStatus>>, AppError> {
+) -> Result<Json<PublicStatusResponse>, AppError> {
     if !public_status_enabled() {
         return Err(AppError::NotFound(
             "public status is disabled — set PUBLIC_STATUS_ENABLED=true to enable".into(),
         ));
     }
-    // Two parallel queries instead of 1 + N sequential queries
-    let (hosts, uptime_map) = tokio::try_join!(
+
+    let (hosts, uptime_map, http_list, http_summaries, ping_list, ping_summaries) = tokio::try_join!(
         async {
             metrics_repo::fetch_host_summaries(&state.db_pool)
                 .await
-                .map_err(|e| AppError::Internal(e.to_string()))
+                .map_err(AppError::from)
         },
         async {
             metrics_repo::fetch_batch_uptime_pct(&state.db_pool, 7)
                 .await
-                .map_err(|e| AppError::Internal(e.to_string()))
+                .map_err(AppError::from)
+        },
+        async {
+            http_monitors_repo::get_all(&state.db_pool)
+                .await
+                .map_err(AppError::from)
+        },
+        async {
+            http_monitors_repo::get_summaries(&state.db_pool)
+                .await
+                .map_err(AppError::from)
+        },
+        async {
+            ping_monitors_repo::get_all(&state.db_pool)
+                .await
+                .map_err(AppError::from)
+        },
+        async {
+            ping_monitors_repo::get_summaries(&state.db_pool)
+                .await
+                .map_err(AppError::from)
         },
     )?;
 
-    let results = hosts
+    let host_rows = hosts
         .into_iter()
         .map(|host| {
             let uptime_7d = uptime_map.get(&host.host_key).copied().unwrap_or(0.0);
@@ -290,7 +335,50 @@ pub async fn public_status(
         })
         .collect();
 
-    Ok(Json(results))
+    let http_summary_map: HashMap<i32, &http_monitors_repo::HttpMonitorSummary> =
+        http_summaries.iter().map(|s| (s.monitor_id, s)).collect();
+    let ping_summary_map: HashMap<i32, &ping_monitors_repo::PingMonitorSummary> =
+        ping_summaries.iter().map(|s| (s.monitor_id, s)).collect();
+
+    let mut monitor_rows: Vec<PublicMonitorStatus> =
+        Vec::with_capacity(http_list.len() + ping_list.len());
+
+    for m in http_list.into_iter().filter(|m| m.enabled) {
+        let summary = http_summary_map.get(&m.id);
+        // `latest_error.is_none() && latest_status_code.is_some()` mirrors the
+        // `successful_checks` criterion in `get_summaries` so the "is_online"
+        // projection stays consistent with the uptime % in the same row.
+        let is_online =
+            summary.is_some_and(|s| s.latest_error.is_none() && s.latest_status_code.is_some());
+        let uptime_24h = summary.map(|s| s.uptime_pct).unwrap_or(0.0);
+        monitor_rows.push(PublicMonitorStatus {
+            monitor_id: m.id,
+            kind: "http",
+            name: m.name,
+            target: m.url,
+            is_online,
+            uptime_24h,
+        });
+    }
+
+    for m in ping_list.into_iter().filter(|m| m.enabled) {
+        let summary = ping_summary_map.get(&m.id);
+        let is_online = summary.is_some_and(|s| s.latest_success == Some(true));
+        let uptime_24h = summary.map(|s| s.uptime_pct).unwrap_or(0.0);
+        monitor_rows.push(PublicMonitorStatus {
+            monitor_id: m.id,
+            kind: "ping",
+            name: m.name,
+            target: m.host,
+            is_online,
+            uptime_24h,
+        });
+    }
+
+    Ok(Json(PublicStatusResponse {
+        hosts: host_rows,
+        monitors: monitor_rows,
+    }))
 }
 
 fn public_status_enabled() -> bool {
