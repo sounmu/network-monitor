@@ -17,8 +17,13 @@ pub struct Claims {
     pub aud: String,
 }
 
-pub static ENCODING_KEY: OnceLock<EncodingKey> = OnceLock::new();
-pub static DECODING_KEY: OnceLock<DecodingKey> = OnceLock::new();
+// Visibility is `pub(crate)` — only `services::user_auth` needs these, and
+// both lockers are sized/typed so the surface is small, but narrowing to
+// "within this crate only" protects against a well-meaning contributor
+// re-exporting them from a test/example crate and leaking key material
+// through a dependency graph.
+pub(crate) static ENCODING_KEY: OnceLock<EncodingKey> = OnceLock::new();
+pub(crate) static DECODING_KEY: OnceLock<DecodingKey> = OnceLock::new();
 
 /// Per-user "tokens issued before this instant are invalid" cutoff cache.
 ///
