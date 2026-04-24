@@ -539,19 +539,32 @@ pub struct SseTicketResponse {
 ///
 /// Requires a valid user JWT on the `Authorization` header. The returned ticket is
 /// bound to the caller's `user_id` and is consumed atomically on the SSE handshake.
-/// See `services::sse_ticket` for rationale.
+/// Per-user `ISSUE_COOLDOWN` (2 s) prevents a tight retry loop on a flaky
+/// SSE connection from burning the entire authenticated API rate-limit
+/// budget on ticket traffic — see `services::sse_ticket` for rationale.
 pub async fn issue_sse_ticket(
     auth: UserGuard,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<SseTicketResponse>, AppError> {
-    let ticket = state
+    match state
         .sse_ticket_store
-        .issue(auth.claims.sub, auth.claims.iat);
-
-    Ok(Json(SseTicketResponse {
-        ticket,
-        expires_in_secs: 60,
-    }))
+        .issue(auth.claims.sub, auth.claims.iat)
+    {
+        crate::services::sse_ticket::IssueOutcome::Minted(ticket) => Ok(Json(SseTicketResponse {
+            ticket,
+            expires_in_secs: 60,
+        })),
+        crate::services::sse_ticket::IssueOutcome::CoolingDown { retry_after_secs } => {
+            tracing::warn!(
+                user_id = auth.claims.sub,
+                retry_after_secs,
+                "🔒 [Auth] SSE ticket issue throttled (per-user cooldown)"
+            );
+            Err(AppError::TooManyRequests(format!(
+                "SSE ticket issued too recently; retry in {retry_after_secs} s"
+            )))
+        }
+    }
 }
 
 /// Validate password strength: min 8 chars, uppercase, lowercase, digit, special char.

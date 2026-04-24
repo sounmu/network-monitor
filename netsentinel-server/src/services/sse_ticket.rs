@@ -30,6 +30,15 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 /// before each EventSource connection, so the end-to-end window is seconds.
 const TICKET_TTL: Duration = Duration::from_secs(60);
 
+/// Minimum interval between ticket issuances for a single user. Without
+/// this, a misbehaving client (or a tight retry loop on a dropped SSE
+/// connection) could mint hundreds of tickets per minute — burning the
+/// entire `API_RATE_LIMIT_MAX` bucket on ticket traffic alone and
+/// preventing the user's own SWR / status calls from landing.
+/// 2 s is well below legitimate SSE reconnection cadence (the browser
+/// `EventSource` retry starts at 3 s) but hard-caps abuse at 30/min.
+const ISSUE_COOLDOWN: Duration = Duration::from_secs(2);
+
 /// Size of the random ticket body in bytes (256 bits).
 const TICKET_BYTES: usize = 32;
 
@@ -40,21 +49,55 @@ pub struct TicketEntry {
     pub expires_at: Instant,
 }
 
+/// Outcome of `SseTicketStore::issue`. `CoolingDown` carries the remaining
+/// cooldown window so the handler can surface a useful `Retry-After`.
+pub enum IssueOutcome {
+    Minted(String),
+    CoolingDown { retry_after_secs: u64 },
+}
+
 /// Thread-safe store of live SSE tickets.
 pub struct SseTicketStore {
     tickets: RwLock<HashMap<String, TicketEntry>>,
+    /// Per-user throttle for `issue()`. Keyed by `user_id`; value is the
+    /// `Instant` of the most recent mint. Separate from `tickets` so the
+    /// hot path doesn't iterate the ticket map just to check a user's
+    /// cooldown. Entries decay implicitly — they're reused by next issue,
+    /// and a bounded periodic sweep (`evict_expired`) drops stale users.
+    last_issue_per_user: RwLock<HashMap<i32, Instant>>,
 }
 
 impl SseTicketStore {
     pub fn new() -> Self {
         Self {
             tickets: RwLock::new(HashMap::new()),
+            last_issue_per_user: RwLock::new(HashMap::new()),
         }
     }
 
-    /// Mint a new ticket for `user_id` and return its opaque string form.
-    /// The returned value is what the client passes back to `/api/stream?key=`.
-    pub fn issue(&self, user_id: i32, issued_at: usize) -> String {
+    /// Attempt to mint a new ticket for `user_id`. Returns `CoolingDown`
+    /// when the same user issued a ticket within `ISSUE_COOLDOWN`; the
+    /// handler maps that to `429` with a `Retry-After` header so the
+    /// client can back off cleanly.
+    pub fn issue(&self, user_id: i32, issued_at: usize) -> IssueOutcome {
+        // Cooldown check first — cheap and avoids entropy draw on throttled calls.
+        let now = Instant::now();
+        {
+            let map = match self.last_issue_per_user.read() {
+                Ok(m) => m,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            if let Some(&last) = map.get(&user_id) {
+                let elapsed = now.saturating_duration_since(last);
+                if elapsed < ISSUE_COOLDOWN {
+                    let remaining = ISSUE_COOLDOWN.saturating_sub(elapsed);
+                    return IssueOutcome::CoolingDown {
+                        retry_after_secs: remaining.as_secs().max(1),
+                    };
+                }
+            }
+        }
+
         let mut raw = [0u8; TICKET_BYTES];
         OsRng.fill_bytes(&mut raw);
         let token = URL_SAFE_NO_PAD.encode(raw);
@@ -62,17 +105,26 @@ impl SseTicketStore {
         let entry = TicketEntry {
             user_id,
             issued_at,
-            expires_at: Instant::now() + TICKET_TTL,
+            expires_at: now + TICKET_TTL,
         };
 
         // Lock poisoning here is recoverable — the map is a plain HashMap and
         // a panic in another thread cannot leave it in a torn state.
-        let mut tickets = match self.tickets.write() {
-            Ok(t) => t,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        tickets.insert(token.clone(), entry);
-        token
+        {
+            let mut tickets = match self.tickets.write() {
+                Ok(t) => t,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            tickets.insert(token.clone(), entry);
+        }
+        {
+            let mut last = match self.last_issue_per_user.write() {
+                Ok(m) => m,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            last.insert(user_id, now);
+        }
+        IssueOutcome::Minted(token)
     }
 
     /// Atomically look up and remove a ticket, returning the issuing session context
@@ -98,13 +150,26 @@ impl SseTicketStore {
 
     /// Drop every entry whose TTL has elapsed. Called from a background task;
     /// lazy eviction on `consume` handles the hot path.
+    ///
+    /// Also prunes the per-user cooldown map of entries older than the
+    /// cooldown window so an idle-but-numerous userbase does not grow the
+    /// map without bound.
     pub fn evict_expired(&self) {
         let now = Instant::now();
-        let mut tickets = match self.tickets.write() {
-            Ok(t) => t,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        tickets.retain(|_, entry| entry.expires_at > now);
+        {
+            let mut tickets = match self.tickets.write() {
+                Ok(t) => t,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            tickets.retain(|_, entry| entry.expires_at > now);
+        }
+        {
+            let mut last = match self.last_issue_per_user.write() {
+                Ok(m) => m,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            last.retain(|_, ts| now.saturating_duration_since(*ts) < ISSUE_COOLDOWN);
+        }
     }
 }
 
@@ -118,10 +183,19 @@ impl Default for SseTicketStore {
 mod tests {
     use super::*;
 
+    fn issue_token(store: &SseTicketStore, user_id: i32, iat: usize) -> String {
+        match store.issue(user_id, iat) {
+            IssueOutcome::Minted(t) => t,
+            IssueOutcome::CoolingDown { retry_after_secs } => {
+                panic!("unexpected cooldown (retry={retry_after_secs}s) in test helper")
+            }
+        }
+    }
+
     #[test]
     fn test_issue_returns_base64url_without_padding() {
         let store = SseTicketStore::new();
-        let token = store.issue(1, 123);
+        let token = issue_token(&store, 1, 123);
         assert!(!token.is_empty());
         assert!(
             !token.contains('='),
@@ -135,22 +209,57 @@ mod tests {
 
     #[test]
     fn test_issue_produces_unique_tickets() {
+        // Different users on the same tick must not collide. Using the same
+        // user twice trips the new cooldown, which is a separate concern
+        // covered by `test_issue_cooldown_throttles_same_user`.
         let store = SseTicketStore::new();
-        let a = store.issue(1, 123);
-        let b = store.issue(1, 123);
+        let a = issue_token(&store, 1, 123);
+        let b = issue_token(&store, 2, 123);
         assert_ne!(a, b, "Two issues should never collide at 256-bit entropy");
     }
 
     #[test]
     fn test_consume_returns_user_id_once_only() {
         let store = SseTicketStore::new();
-        let token = store.issue(42, 123);
+        let token = issue_token(&store, 42, 123);
         let consumed = store.consume(&token).expect("ticket should exist");
         assert_eq!(consumed.user_id, 42);
         assert_eq!(
             store.consume(&token),
             None,
             "Tickets are single-use — second consume must fail"
+        );
+    }
+
+    #[test]
+    fn test_issue_cooldown_throttles_same_user() {
+        // Two back-to-back issues for the same user must trip the per-user
+        // cooldown — the first mints a real token, the second returns
+        // `CoolingDown` with a positive retry hint.
+        let store = SseTicketStore::new();
+        let first = store.issue(1, 123);
+        let second = store.issue(1, 123);
+        assert!(
+            matches!(first, IssueOutcome::Minted(_)),
+            "first call must succeed"
+        );
+        match second {
+            IssueOutcome::CoolingDown { retry_after_secs } => {
+                assert!(retry_after_secs >= 1, "Retry-After must be at least 1 s");
+            }
+            IssueOutcome::Minted(_) => panic!("second call must be throttled"),
+        }
+    }
+
+    #[test]
+    fn test_issue_cooldown_is_per_user() {
+        // Different users are independent — one user's cooldown must not
+        // lock out another user's parallel SSE handshake.
+        let store = SseTicketStore::new();
+        assert!(matches!(store.issue(1, 123), IssueOutcome::Minted(_)));
+        assert!(
+            matches!(store.issue(2, 123), IssueOutcome::Minted(_)),
+            "a different user must not inherit the first user's cooldown"
         );
     }
 
@@ -183,7 +292,7 @@ mod tests {
     #[test]
     fn test_evict_expired_removes_only_stale_entries() {
         let store = SseTicketStore::new();
-        let live_token = store.issue(1, 123);
+        let live_token = issue_token(&store, 1, 123);
         {
             let mut tickets = store.tickets.write().unwrap();
             tickets.insert(
