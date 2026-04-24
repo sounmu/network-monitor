@@ -6,8 +6,16 @@
 //! overlaps with the CPU delta sleeps.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
+
+/// Tracks whether `collect_sysinfo` has ever run to completion. The first
+/// CPU-delta measurement is extra-susceptible to "all zeroes" because no
+/// per-process tick baseline exists yet; giving it a longer sleep between
+/// refresh phases stabilises the output at the cost of ~200 ms on the
+/// very first scrape only. Subsequent scrapes revert to the tight loop.
+static CPU_WARMED_UP: AtomicBool = AtomicBool::new(false);
 use sysinfo::{Components, DiskUsage, Disks, Networks, System};
 
 use crate::gpu;
@@ -16,7 +24,7 @@ use crate::models::{
     TemperatureInfo,
 };
 
-/// Virtual/dummy interface prefix list.
+/// Virtual/dummy interface prefix list shared by every host OS.
 ///
 /// Filtering on the agent side because:
 /// - It reduces the payload sent to the server (there can be many veth/docker interfaces).
@@ -27,16 +35,29 @@ const FILTERED_PREFIXES: &[&str] = &[
     "br-",    // container user-defined bridge
     "veth",   // per-container virtual ethernet
     "utun",   // userspace tunnel (VPN, etc.)
-    "awdl",   // Apple Wireless Direct Link (AirDrop)
-    "llw",    // Low-latency WLAN (iPhone tethering)
-    "gif",    // Generic Tunnel Interface
-    "stf",    // IPv6-in-IPv4 (6to4) tunnel
-    "anpi",   // Apple Network Proxy Interface
-    "ap",     // Apple internal wireless AP
+    "gif",    // Generic Tunnel Interface (macOS + BSD)
+    "stf",    // IPv6-in-IPv4 (6to4) tunnel (macOS + BSD)
 ];
+
+/// Apple-only prefixes. OpenWRT exposes `apcli0` (AP-client mode) which
+/// starts with `ap` and would be silently dropped if this list was
+/// unconditionally merged into `FILTERED_PREFIXES`. Gate it behind
+/// `#[cfg(target_os = "macos")]` so Linux keeps its real Wi-Fi client
+/// interface visible.
+#[cfg(target_os = "macos")]
+const APPLE_FILTERED_PREFIXES: &[&str] = &[
+    "awdl", // Apple Wireless Direct Link (AirDrop)
+    "llw",  // Low-latency WLAN (iPhone tethering)
+    "anpi", // Apple Network Proxy Interface
+    "ap",   // Apple internal wireless AP
+];
+
+#[cfg(not(target_os = "macos"))]
+const APPLE_FILTERED_PREFIXES: &[&str] = &[];
 
 fn is_physical_interface(name: &str) -> bool {
     !FILTERED_PREFIXES.iter().any(|p| name.starts_with(p))
+        && !APPLE_FILTERED_PREFIXES.iter().any(|p| name.starts_with(p))
 }
 
 /// Previous disk I/O counters for delta calculation, keyed by device name.
@@ -170,6 +191,19 @@ fn compute_network_rate(total_rx: u64, total_tx: u64) -> (f64, f64) {
     }
 }
 
+/// Upper bound on how long a baseline can sit before it is considered
+/// stale and the rate calculation is abandoned. Without this, a laptop
+/// that wakes from sleep after an hour would divide a large counter
+/// delta by `3600 s` and under-report throughput (or, conversely,
+/// divide a `saturating_sub`-collapsed 0 delta by the same window and
+/// under-report until the next cycle). Abandoning the sample and
+/// refreshing the baseline restores accurate rates on the next tick.
+///
+/// 60 s is comfortably above the default 10 s scrape interval and any
+/// reasonable per-host `scrape_interval_secs` override, so legitimate
+/// scrapes never hit it; only clock jumps or suspend/resume do.
+const MAX_ELAPSED_SECS: f64 = 60.0;
+
 fn compute_rate_with_baseline(
     prev: &mut (u64, u64, Instant),
     current_a: u64,
@@ -179,6 +213,13 @@ fn compute_rate_with_baseline(
 ) -> (f64, f64) {
     let elapsed = now.duration_since(prev.2).as_secs_f64();
     if elapsed < min_elapsed_secs {
+        return (0.0, 0.0);
+    }
+    if elapsed > MAX_ELAPSED_SECS {
+        // Baseline is stale (suspend/resume, clock jump, server lull).
+        // Refresh it so the next scrape computes over a fresh window —
+        // returning the last-known counters paired with the current time.
+        *prev = (current_a, current_b, now);
         return (0.0, 0.0);
     }
 
@@ -235,17 +276,31 @@ pub(crate) async fn collect_sysinfo() -> SysinfoResult {
         //   Phase 3: compute delta from Phase 2
         // An earlier attempt to reduce this to two calls broke top-10 process
         // reporting on macOS — do not remove the middle call.
-        sys.refresh_cpu_usage();
-        sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
-        std::thread::sleep(Duration::from_millis(100));
+        //
+        // Warm-up window: the very first scrape uses 200 ms sleeps instead of
+        // the steady-state 100 ms, because there is no prior baseline to
+        // differentiate against and the 100 ms → 200 ms bump materially
+        // lowers the rate of "all zeroes" first-scrape payloads observed on
+        // busy-but-jittery Linux VMs. Subsequent scrapes always have a
+        // warm baseline from the previous cycle and run fast.
+        let sleep_ms = if CPU_WARMED_UP.load(Ordering::Relaxed) {
+            100
+        } else {
+            200
+        };
 
         sys.refresh_cpu_usage();
         sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
-        std::thread::sleep(Duration::from_millis(100));
+        std::thread::sleep(Duration::from_millis(sleep_ms));
+
+        sys.refresh_cpu_usage();
+        sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+        std::thread::sleep(Duration::from_millis(sleep_ms));
 
         sys.refresh_cpu_usage();
         sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
         sys.refresh_memory();
+        CPU_WARMED_UP.store(true, Ordering::Relaxed);
 
         let cpu_usage = sys.global_cpu_usage();
         let cpu_cores: Vec<f32> = sys.cpus().iter().map(|c| c.cpu_usage()).collect();
@@ -318,13 +373,39 @@ pub(crate) async fn collect_sysinfo() -> SysinfoResult {
             fifteen_min: la.fifteen,
         };
 
-        // Top 10 processes by CPU usage (already refreshed twice above for accurate delta)
+        // Top 10 processes by CPU usage (already refreshed twice above for accurate delta).
+        //
+        // Process names are truncated to 128 UTF-8 bytes. Long-name offenders
+        // exist in the wild: Electron/Chromium apps embed full command-line
+        // args in `comm`, docker-proxy can carry multi-kB port maps, and
+        // Java servers sometimes splat their full classpath into argv[0].
+        // Unbounded names bloat the bincode payload, the DB `processes`
+        // JSON column, and the dashboard UI row heights with no payoff.
+        // 128 bytes accommodates every well-behaved binary name and stops
+        // there.
+        const PROCESS_NAME_MAX_BYTES: usize = 128;
+        let truncate_name = |s: String| -> String {
+            if s.len() <= PROCESS_NAME_MAX_BYTES {
+                s
+            } else {
+                // Walk backwards to the nearest UTF-8 char boundary so we
+                // don't split a multi-byte sequence and produce invalid UTF-8.
+                let mut cut = PROCESS_NAME_MAX_BYTES;
+                while cut > 0 && !s.is_char_boundary(cut) {
+                    cut -= 1;
+                }
+                let mut truncated = s;
+                truncated.truncate(cut);
+                truncated.push('…');
+                truncated
+            }
+        };
         let mut process_list: Vec<ProcessInfo> = sys
             .processes()
             .values()
             .map(|p| ProcessInfo {
                 pid: p.pid().as_u32(),
-                name: p.name().to_string_lossy().into_owned(),
+                name: truncate_name(p.name().to_string_lossy().into_owned()),
                 cpu_usage: p.cpu_usage(),
                 memory_mb: p.memory() / 1024 / 1024,
             })
