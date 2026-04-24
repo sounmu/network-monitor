@@ -350,10 +350,36 @@ impl MetricsQueryCache {
     }
 
     /// Build a cache key from query parameters.
-    /// Rounds timestamps to 5-minute boundaries so near-identical queries share a cache entry.
+    ///
+    /// Rounds timestamps so *near-identical* dashboard queries collapse onto a
+    /// shared cache entry. The rounding granularity is **dynamic** — it must
+    /// stay aligned with the frontend rounding contract in
+    /// `netsentinel-web/app/lib/api.ts` (default 60 s, live 1 m/5 m presets
+    /// use 10 s). Previously this was a fixed 300 s bucket, which meant a
+    /// 10-s-resolution live query hit the same cache key for the whole 5-min
+    /// window and saw stale data for up to 120 s (the cache TTL).
+    ///
+    /// The tiers here match the three `fetch_metrics_range` branches: raw
+    /// (≤ 6 h) gets tight 10 s buckets so live dashboards see fresh data;
+    /// 5-min rollup (6 h–14 d) gets 60 s buckets; wide re-aggregation
+    /// (> 14 d) keeps the old 300 s buckets since the query itself is
+    /// rounded to 15-min windows anyway. A wider bucket is never used for a
+    /// tighter request — that would flood the cache — but it's always safe
+    /// to use a tighter bucket for a longer range, just less cache-efficient.
     pub fn make_key(host_key: &str, start_ts: i64, end_ts: i64) -> String {
-        let start_rounded = start_ts / 300 * 300;
-        let end_rounded = (end_ts + 299) / 300 * 300;
+        const RAW_BOUNDARY_SECS: i64 = 6 * 3600;
+        const ROLLUP_BOUNDARY_SECS: i64 = 14 * 24 * 3600;
+
+        let range = (end_ts - start_ts).max(0);
+        let bucket: i64 = if range <= RAW_BOUNDARY_SECS {
+            10
+        } else if range <= ROLLUP_BOUNDARY_SECS {
+            60
+        } else {
+            300
+        };
+        let start_rounded = start_ts.div_euclid(bucket) * bucket;
+        let end_rounded = (end_ts + bucket - 1).div_euclid(bucket) * bucket;
         format!("{}:{}:{}", host_key, start_rounded, end_rounded)
     }
 
@@ -582,6 +608,30 @@ mod tests {
         for i in 0..7 {
             assert!(cache.get(&format!("k{i}")).is_none());
         }
+    }
+
+    #[test]
+    fn make_key_picks_different_bucket_per_tier() {
+        // Pin the dynamic-granularity contract: the three tiers
+        // (≤ 6 h / ≤ 14 d / > 14 d) emit distinguishable keys for the same
+        // absolute start. Without this, the fixed 300 s bucket regression
+        // silently resurfaces — live dashboards would see stale data again
+        // (see the comment on `make_key`).
+        let start: i64 = 1_700_000_000;
+        let k_live = MetricsQueryCache::make_key("h", start, start + 5 * 60);
+        let k_rollup = MetricsQueryCache::make_key("h", start, start + 12 * 3600);
+        let k_wide = MetricsQueryCache::make_key("h", start, start + 30 * 86400);
+        assert_ne!(k_live, k_rollup, "live vs rollup must not collide");
+        assert_ne!(k_rollup, k_wide, "rollup vs wide must not collide");
+
+        // Live tier advances one bucket after a 10 s shift (frontend's own
+        // live rounding granularity in `api.ts`). Pin the boundary so a
+        // regression to a coarser server bucket is caught immediately.
+        let k_live_next = MetricsQueryCache::make_key("h", start + 10, start + 10 + 5 * 60);
+        assert_ne!(
+            k_live, k_live_next,
+            "10 s shift on live range must cross a bucket boundary"
+        );
     }
 
     #[test]
