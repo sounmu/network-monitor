@@ -64,7 +64,9 @@ pub async fn update_host_configs(
         results.push(row);
     }
     hosts_snapshot::refresh(&state.db_pool, &state.hosts_snapshot).await;
-    tracing::info!(host_key = %host_key, "🔔 [AlertConfig] Per-host alert configs updated");
+    // `?host_key` (Debug) escapes control chars so a maliciously-crafted
+    // path param cannot forge additional log lines (CRLF injection).
+    tracing::info!(host_key = ?host_key, "🔔 [AlertConfig] Per-host alert configs updated");
     Ok(Json(results))
 }
 
@@ -76,10 +78,9 @@ pub async fn delete_host_configs(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let deleted = alert_configs_repo::delete_host_configs(&state.db_pool, &host_key).await?;
     if !deleted {
-        return Err(AppError::NotFound(format!(
-            "No alert config overrides found for host: {}",
-            host_key
-        )));
+        return Err(AppError::NotFound(
+            "No alert config overrides found for host".to_string(),
+        ));
     }
     hosts_snapshot::refresh(&state.db_pool, &state.hosts_snapshot).await;
     tracing::info!(host_key = %host_key, "🔔 [AlertConfig] Per-host overrides deleted, reverted to global");

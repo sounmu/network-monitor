@@ -135,7 +135,7 @@ pub async fn get_host(
 ) -> Result<Json<HostRow>, AppError> {
     let host = hosts_repo::get_host(&state.db_pool, &host_key)
         .await?
-        .ok_or_else(|| AppError::NotFound(format!("Host not found: {}", host_key)))?;
+        .ok_or_else(|| AppError::NotFound("Host not found".to_string()))?;
     Ok(Json(host))
 }
 
@@ -163,7 +163,7 @@ pub async fn update_host(
 
     let host = hosts_repo::update_host(&state.db_pool, &host_key, &body)
         .await?
-        .ok_or_else(|| AppError::NotFound(format!("Host not found: {}", host_key)))?;
+        .ok_or_else(|| AppError::NotFound("Host not found".to_string()))?;
 
     if let Ok(mut lks) = state.last_known_status.write()
         && let Some(arc) = lks.get_mut(&host.host_key)
@@ -195,7 +195,7 @@ pub async fn delete_host(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let deleted = hosts_repo::delete_host(&state.db_pool, &host_key).await?;
     if !deleted {
-        return Err(AppError::NotFound(format!("Host not found: {}", host_key)));
+        return Err(AppError::NotFound("Host not found".to_string()));
     }
 
     // Clean up in-memory caches for the deleted host
@@ -207,6 +207,11 @@ pub async fn delete_host(
     }
     hosts_snapshot::refresh(&state.db_pool, &state.hosts_snapshot).await;
 
-    tracing::info!(host_key = %host_key, "🗑️ [Hosts] Host deleted");
+    // `?host_key` (Debug) escapes control chars so a path param containing
+    // `\r\n` cannot forge additional log lines (CRLF log injection).
+    // `host.host_key` / `host.display_name` fields sourced from DB rows pass
+    // through `validate_host_key_format` on write, so `%` is fine for them;
+    // the bare `host_key` path extractor has not been re-validated here.
+    tracing::info!(host_key = ?host_key, "🗑️ [Hosts] Host deleted");
     Ok(Json(serde_json::json!({ "deleted": host_key })))
 }
