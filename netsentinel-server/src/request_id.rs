@@ -71,13 +71,21 @@ pub async fn request_id(request: axum::extract::Request, next: axum::middleware:
 /// share a tighter per-IP bucket than the authenticated SPA path so abusive
 /// unauthenticated traffic cannot exhaust the generous `API_RATE_LIMIT_MAX`
 /// budget the browser client needs for its SWR + SSE + dashboard polling.
+///
+/// Note on `/api/auth/refresh`: although the endpoint takes no `Authorization`
+/// header, it is *credential-bearing* — the httpOnly refresh cookie is the
+/// credential. Counting its requests against the strict 30/min public
+/// bucket caused NAT / Cloudflare-tunnel deployments with more than a
+/// handful of concurrent dashboards to 429 each other out whenever an
+/// access-token-expiry wave hit (all browsers refresh at roughly the
+/// same second). It lives in the authenticated 200/min bucket instead;
+/// a client without a valid refresh cookie still gets a cheap 401.
 fn is_public_path(path: &str) -> bool {
     matches!(
         path,
         "/api/auth/login"
             | "/api/auth/setup"
             | "/api/auth/status"
-            | "/api/auth/refresh"
             | "/api/public/status"
             | "/api/health"
             | "/metrics"

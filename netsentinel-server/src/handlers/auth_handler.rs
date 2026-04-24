@@ -164,13 +164,34 @@ pub async fn login(
     headers: HeaderMap,
     Json(body): Json<LoginRequest>,
 ) -> Result<Response, AppError> {
-    // Rate limit by client IP (secure extraction, immune to X-Forwarded-For spoofing)
+    // Two-bucket rate limit: per-IP (broad, catches scatter-gun brute force)
+    // and per-username (tight, catches targeted brute force). Both must
+    // admit the request. The IP bucket is deliberately looser than the
+    // per-username one so NAT'd / Cloudflare-tunnel deployments with
+    // several dashboards do not 429 each other out when one user mistypes.
     let ip_str = extract_client_ip(&headers, &peer_addr, state.trusted_proxy_count);
+    // `username` is trimmed + lowered-case for bucket keying only; the
+    // actual credential lookup below uses the supplied value unchanged so
+    // case-sensitivity policy still lives with `users_repo`.
+    let user_key = body.username.trim().to_lowercase();
 
     if let Err(retry_after) = state.login_rate_limiter.check(&ip_str) {
-        tracing::warn!(ip = %ip_str, "🔒 [Auth] Login rate limited");
+        tracing::warn!(ip = %ip_str, "🔒 [Auth] Login rate limited (IP bucket)");
         return Err(AppError::TooManyRequests(format!(
             "Too many login attempts. Try again in {retry_after} seconds."
+        )));
+    }
+    if !user_key.is_empty()
+        && let Err(retry_after) = state.login_user_rate_limiter.check(&user_key)
+    {
+        // Intentionally don't log the username — that would turn our own
+        // rate-limit log into an account-enumeration oracle if it leaks.
+        tracing::warn!(
+            ip = %ip_str,
+            "🔒 [Auth] Login rate limited (user bucket)"
+        );
+        return Err(AppError::TooManyRequests(format!(
+            "Too many login attempts for this account. Try again in {retry_after} seconds."
         )));
     }
 

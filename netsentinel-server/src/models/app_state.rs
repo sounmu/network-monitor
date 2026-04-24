@@ -46,8 +46,19 @@ pub struct AppState {
     pub last_known_status: Arc<RwLock<HashMap<String, Arc<HostStatusPayload>>>>,
     /// TTL cache for long-range metric queries (avoids repeated DB scans for same range)
     pub metrics_query_cache: Arc<MetricsQueryCache>,
-    /// Per-IP login attempt rate limiter
+    /// Per-IP login attempt rate limiter. Broad bucket that catches
+    /// scatter-gun brute force attempts varying the username. Default 30 per
+    /// 5 min — sized so a small NAT / Cloudflare-tunnel deployment with
+    /// several concurrent dashboards does not lock itself out when one user
+    /// mistypes a password. See the companion `login_user_rate_limiter`
+    /// below for the per-username bucket that catches targeted attempts.
     pub login_rate_limiter: Arc<LoginRateLimiter>,
+    /// Per-username login attempt rate limiter. Tighter bucket (default
+    /// 10 / 5 min) that catches focused brute force against a single
+    /// account. Keyed by the **supplied username**, so an attacker cannot
+    /// evade the per-account limit by rotating IPs. Both limiters must
+    /// admit the request; either tripping returns 429.
+    pub login_user_rate_limiter: Arc<LoginRateLimiter>,
     /// Number of trusted reverse proxies in front of the server.
     /// When 0, X-Forwarded-For is ignored and the peer socket IP is used.
     /// When >0, the Nth IP from the right of X-Forwarded-For is used.

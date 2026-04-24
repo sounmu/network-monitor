@@ -179,8 +179,25 @@ async fn main() -> anyhow::Result<()> {
         sse_tx,
         last_known_status: Arc::new(RwLock::new(HashMap::new())),
         metrics_query_cache: metrics_query_cache.clone(),
+        // Per-IP bucket — default raised from 10 → 30 when the per-username
+        // bucket was introduced. A NAT office with several concurrent
+        // dashboards needs headroom for the occasional typo'd password from
+        // one user without locking out the rest; the per-username bucket
+        // (below) keeps targeted brute force at the original tight cap.
         login_rate_limiter: Arc::new(LoginRateLimiter::new(
             std::env::var("LOGIN_RATE_LIMIT_MAX")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(30),
+            std::time::Duration::from_secs(
+                std::env::var("LOGIN_RATE_LIMIT_WINDOW_SECS")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(300),
+            ),
+        )),
+        login_user_rate_limiter: Arc::new(LoginRateLimiter::new(
+            std::env::var("LOGIN_USER_RATE_LIMIT_MAX")
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(10),
