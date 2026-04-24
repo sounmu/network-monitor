@@ -95,6 +95,13 @@ pub async fn issue_new_family(
     let family_id = random_family_id();
     let expires_at = Utc::now() + Duration::days(REFRESH_TTL_DAYS);
 
+    // All `sqlx::Error`s flow through `From<sqlx::Error> for AppError` in
+    // errors.rs — that impl already logs the full `{err:#}` chain and
+    // masks the client response to "Internal server error". The
+    // per-site `map_err("Failed to X: {e}")` wrappers that used to live
+    // here added no operational context that `#[tracing::instrument]` on
+    // the enclosing handler wasn't already providing through span names,
+    // and they leaked partial error text into the logs unmasked.
     refresh_tokens_repo::insert(
         pool,
         user_id,
@@ -105,8 +112,7 @@ pub async fn issue_new_family(
         user_agent,
         ip,
     )
-    .await
-    .map_err(|e| AppError::Internal(format!("Failed to persist refresh token: {e}")))?;
+    .await?;
 
     Ok(IssuedRefreshToken {
         plaintext,
@@ -170,9 +176,7 @@ pub async fn rotate(
     // journal) holds the writer lock only for the UPDATE + INSERT pair,
     // which is cheap. Reads happen outside the transaction so contention
     // on the writer lock is minimal.
-    let existing = refresh_tokens_repo::find_by_hash(pool, &token_hash)
-        .await
-        .map_err(|e| AppError::Internal(format!("Failed to look up refresh token: {e}")))?;
+    let existing = refresh_tokens_repo::find_by_hash(pool, &token_hash).await?;
 
     let Some(row) = existing else {
         return Ok(RotateOutcome::Rejected);
@@ -196,10 +200,7 @@ pub async fn rotate(
     let new_hash = hash_token(&new_plain);
     let new_expires_at = Utc::now() + Duration::days(REFRESH_TTL_DAYS);
 
-    let mut tx = pool
-        .begin()
-        .await
-        .map_err(|e| AppError::Internal(format!("Failed to begin transaction: {e}")))?;
+    let mut tx = pool.begin().await?;
 
     let revoke_result = sqlx::query(
         "UPDATE refresh_tokens SET revoked_at = strftime('%s','now') \
@@ -207,8 +208,7 @@ pub async fn rotate(
     )
     .bind(row.id)
     .execute(&mut *tx)
-    .await
-    .map_err(|e| AppError::Internal(format!("Failed to revoke rotated token: {e}")))?;
+    .await?;
 
     if revoke_result.rows_affected() != 1 {
         // Someone else revoked this row between our read and our UPDATE.
@@ -232,12 +232,9 @@ pub async fn rotate(
     .bind(user_agent)
     .bind(ip)
     .execute(&mut *tx)
-    .await
-    .map_err(|e| AppError::Internal(format!("Failed to insert rotated refresh token: {e}")))?;
+    .await?;
 
-    tx.commit()
-        .await
-        .map_err(|e| AppError::Internal(format!("Failed to commit rotation: {e}")))?;
+    tx.commit().await?;
 
     Ok(RotateOutcome::Rotated(IssuedRefreshToken {
         plaintext: new_plain,
@@ -286,13 +283,8 @@ pub async fn revoke_single(pool: &DbPool, presented: &str) -> Result<(), AppErro
         return Ok(());
     }
     let token_hash = hash_token(presented);
-    if let Some(row) = refresh_tokens_repo::find_by_hash(pool, &token_hash)
-        .await
-        .map_err(|e| AppError::Internal(format!("Failed to look up refresh token: {e}")))?
-    {
-        refresh_tokens_repo::revoke_by_id(pool, row.id)
-            .await
-            .map_err(|e| AppError::Internal(format!("Failed to revoke refresh token: {e}")))?;
+    if let Some(row) = refresh_tokens_repo::find_by_hash(pool, &token_hash).await? {
+        refresh_tokens_repo::revoke_by_id(pool, row.id).await?;
     }
     Ok(())
 }
@@ -300,9 +292,7 @@ pub async fn revoke_single(pool: &DbPool, presented: &str) -> Result<(), AppErro
 /// Revoke every live refresh token for a user. Used by server logout and
 /// the admin kill-switch (complements `users.tokens_revoked_at`).
 pub async fn revoke_all_for_user(pool: &DbPool, user_id: i32) -> Result<(), AppError> {
-    refresh_tokens_repo::revoke_all_for_user(pool, user_id)
-        .await
-        .map_err(|e| AppError::Internal(format!("Failed to revoke refresh tokens: {e}")))?;
+    refresh_tokens_repo::revoke_all_for_user(pool, user_id).await?;
     Ok(())
 }
 

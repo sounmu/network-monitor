@@ -176,40 +176,51 @@ pub async fn load_all_as_map(pool: &DbPool) -> Result<HashMap<String, AlertConfi
 
     let mut map = HashMap::new();
     let mut host_overrides: HashMap<(&str, MetricType), MetricAlertRule> = HashMap::new();
-    let mut host_keys_set = std::collections::HashSet::new();
 
+    // Pass 1 — collect overrides only. Previously a parallel
+    // `HashSet<&str>` recorded which hosts appeared, then pass 2
+    // iterated it and called `.to_string()` on each entry → two
+    // allocations per unique host (the hash entry + the final String
+    // key). Drop the HashSet and let `map` itself act as the dedupe
+    // structure via `contains_key`.
     for row in &rows {
         if let Some(ref hk) = row.host_key
             && row.sub_key.is_none()
         {
             host_overrides.insert((hk.as_str(), row.metric_type), row_to_rule(row));
-            host_keys_set.insert(hk.as_str());
-        } else if let Some(ref hk) = row.host_key {
-            host_keys_set.insert(hk.as_str());
         }
     }
 
-    for hk in host_keys_set {
-        let pick = |metric: MetricType, fallback: MetricAlertRule| -> MetricAlertRule {
-            host_overrides
-                .get(&(hk, metric))
-                .copied()
-                .unwrap_or(fallback)
-        };
-        map.insert(
-            hk.to_string(),
-            AlertConfig {
-                cpu: pick(MetricType::Cpu, global_cpu),
-                memory: pick(MetricType::Memory, global_mem),
-                disk: pick(MetricType::Disk, global_disk),
-                load: pick(MetricType::Load, global_load),
-                network: pick(MetricType::Network, global_network),
-                temperature: pick(MetricType::Temperature, global_temperature),
-                gpu: pick(MetricType::Gpu, global_gpu),
-                load_threshold: 4.0,
-                load_cooldown_secs: 60,
-            },
-        );
+    // Pass 2 — materialize one `AlertConfig` per distinct `host_key`.
+    // `contains_key(&str)` avoids allocating until we know the entry is
+    // new; the allocation that remains (`hk.clone()`) is the single
+    // unavoidable `String` that becomes the map key.
+    for row in &rows {
+        if let Some(ref hk) = row.host_key
+            && !map.contains_key(hk.as_str())
+        {
+            let hk_ref = hk.as_str();
+            let pick = |metric: MetricType, fallback: MetricAlertRule| -> MetricAlertRule {
+                host_overrides
+                    .get(&(hk_ref, metric))
+                    .copied()
+                    .unwrap_or(fallback)
+            };
+            map.insert(
+                hk.clone(),
+                AlertConfig {
+                    cpu: pick(MetricType::Cpu, global_cpu),
+                    memory: pick(MetricType::Memory, global_mem),
+                    disk: pick(MetricType::Disk, global_disk),
+                    load: pick(MetricType::Load, global_load),
+                    network: pick(MetricType::Network, global_network),
+                    temperature: pick(MetricType::Temperature, global_temperature),
+                    gpu: pick(MetricType::Gpu, global_gpu),
+                    load_threshold: 4.0,
+                    load_cooldown_secs: 60,
+                },
+            );
+        }
     }
 
     map.insert(
