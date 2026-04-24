@@ -269,7 +269,19 @@ pub(crate) async fn read_docker_cache(
 
             for c in containers.iter() {
                 for t in &targets {
-                    if c.image.contains(t.as_str()) {
+                    // Match against the image's **repository name** segment,
+                    // not a raw `contains`. The old substring match reported
+                    // `nginx-exporter` as matching a `nginx` target — which
+                    // is what the Prometheus folks ship *alongside* the real
+                    // nginx image, so a user watching `nginx` could silently
+                    // end up monitoring the exporter and miss the outage.
+                    //
+                    // The image reference format is
+                    // `[registry/]repo[:tag][@digest]` (see Docker image
+                    // reference spec). We care about the repo portion — take
+                    // the substring between the last `/` (or start) and the
+                    // first `:` / `@`, then match exactly.
+                    if image_repo_matches(&c.image, t.as_str()) {
                         matched.insert(t.as_str());
                         result.push(c.clone());
                         break;
@@ -294,6 +306,72 @@ pub(crate) async fn read_docker_cache(
     }
 }
 
+/// Match a Docker image reference against a target name, comparing only
+/// the **repository** component. Returns `true` when `target` equals the
+/// repo name exactly OR equals a full `namespace/repo` prefix.
+///
+/// Examples:
+///   - `image="nginx:1.25", target="nginx"`            → true
+///   - `image="nginx:1.25", target="nginx-exporter"`   → false  ← regression fix
+///   - `image="library/nginx:1.25", target="nginx"`    → true
+///   - `image="ghcr.io/foo/bar:v1@sha256:…", target="bar"` → true
+///   - `image="ghcr.io/foo/bar:v1", target="foo/bar"`  → true
+///
+/// Not a full OCI reference parser — a registry with a port
+/// (`localhost:5000/foo`) is deliberately treated as registry-stripped.
+/// Covers the common case that caused false positives without adding a
+/// dependency on an image-reference crate.
+fn image_repo_matches(image: &str, target: &str) -> bool {
+    // Drop `@sha256:…` digest suffix first.
+    let without_digest = image.split('@').next().unwrap_or(image);
+    // Drop the `:tag` suffix, but only when the colon belongs to the tag —
+    // a `host:port/` registry prefix has its own colon that must survive.
+    // Find the tag colon by looking only inside the segment after the
+    // final `/` (or the whole string if there is no `/`).
+    let path_start = without_digest.rfind('/').map(|i| i + 1).unwrap_or(0);
+    let without_tag = match without_digest[path_start..].find(':') {
+        Some(rel) => &without_digest[..path_start + rel],
+        None => without_digest,
+    };
+
+    // Match full namespaced form first (`library/nginx` == target).
+    if without_tag == target {
+        return true;
+    }
+    // Then match the bare repo name (last path segment).
+    let repo_only = without_tag.rsplit('/').next().unwrap_or(without_tag);
+    repo_only == target
+}
+
+#[cfg(test)]
+mod image_match_tests {
+    use super::image_repo_matches;
+
+    #[test]
+    fn matches_bare_repo() {
+        assert!(image_repo_matches("nginx:1.25", "nginx"));
+        assert!(image_repo_matches("nginx", "nginx"));
+    }
+
+    #[test]
+    fn does_not_match_partial_repo_name() {
+        // The original bug: `nginx-exporter` used to match a `nginx` target.
+        assert!(!image_repo_matches("nginx-exporter:1.0", "nginx"));
+        assert!(!image_repo_matches("quay.io/nginx-exporter", "nginx"));
+    }
+
+    #[test]
+    fn matches_namespace_slash_repo() {
+        assert!(image_repo_matches("library/nginx:1.25", "nginx"));
+        assert!(image_repo_matches("library/nginx:1.25", "library/nginx"));
+    }
+
+    #[test]
+    fn matches_through_registry_and_digest() {
+        assert!(image_repo_matches("ghcr.io/foo/bar:v1@sha256:abc", "bar"));
+    }
+}
+
 /// Background task that polls container resource stats every 10 seconds.
 /// Uses bollard's one-shot stats API to avoid maintaining per-container streaming connections.
 /// Docker client is created once and reused across cycles; reconnects only on error.
@@ -312,14 +390,17 @@ pub(crate) async fn docker_stats_poller(
 
     let mut backoff = Duration::from_secs(10);
     const MAX_BACKOFF: Duration = Duration::from_secs(300);
+    /// Minimum time the inner poll loop must run without erroring before
+    /// we trust the connection enough to reset the reconnect backoff.
+    /// Without this, a daemon that accepts a connect but then dies
+    /// within the first poll would endlessly oscillate at the base
+    /// 10 s backoff, hammering the recovering daemon with reconnects.
+    const HEALTHY_DURATION_FOR_RESET: Duration = Duration::from_secs(60);
 
     loop {
         // Connect once, reuse across multiple poll cycles
         let docker = match Docker::connect_with_local_defaults() {
-            Ok(d) => {
-                backoff = Duration::from_secs(10); // reset on success
-                d
-            }
+            Ok(d) => d,
             Err(e) => {
                 tracing::warn!(err = ?e, "Docker stats connection failed, retrying in {}s", backoff.as_secs());
                 tokio::time::sleep(backoff).await;
@@ -327,6 +408,7 @@ pub(crate) async fn docker_stats_poller(
                 continue;
             }
         };
+        let connected_at = std::time::Instant::now();
 
         // Inner loop: reuse this docker client until an error forces reconnect
         loop {
@@ -337,6 +419,19 @@ pub(crate) async fn docker_stats_poller(
             {
                 break; // reconnect outer loop
             }
+        }
+
+        // Reset backoff only when the inner loop stayed healthy long enough
+        // to prove the daemon is actually stable. A fast flap (connect OK,
+        // first poll errors) keeps the exponential escalation alive.
+        if connected_at.elapsed() >= HEALTHY_DURATION_FOR_RESET {
+            backoff = Duration::from_secs(10);
+        } else {
+            tracing::warn!(
+                "Docker poll loop died after {} s — keeping backoff at {} s",
+                connected_at.elapsed().as_secs(),
+                backoff.as_secs()
+            );
         }
     }
 }
