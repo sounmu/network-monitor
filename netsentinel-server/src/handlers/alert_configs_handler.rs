@@ -9,7 +9,6 @@ use crate::models::app_state::AppState;
 use crate::repositories::alert_configs_repo::{
     self, AlertConfigRow, MetricType, UpsertAlertRequest,
 };
-use crate::repositories::hosts_repo;
 use crate::services::auth::{AdminGuard, UserGuard};
 use crate::services::hosts_snapshot;
 
@@ -146,12 +145,32 @@ pub async fn bulk_update_host_configs(
         validate_alert_request(req)?;
     }
 
-    // Make sure every targeted host actually exists; this gives a cleaner 4xx
-    // than letting a FK violation surface from Postgres.
-    for hk in &body.host_keys {
-        if hosts_repo::get_host(&state.db_pool, hk).await?.is_none() {
-            return Err(AppError::BadRequest(format!("unknown host_key: {hk}")));
-        }
+    // Existence check via the in-memory hosts snapshot instead of
+    // `hosts_repo::get_host` per host. The snapshot refreshes on every
+    // host mutation handler and on a 60 s background tick, so it is
+    // authoritative for "host registered" checks; the previous N+1 DB
+    // round-trip cost up to 500 SELECTs against the writer-locked
+    // SQLite pool just to give a friendlier error than the eventual
+    // FK violation. The error body intentionally drops the unknown
+    // `host_key` value — same CRLF-reflection rationale as the other
+    // handlers.
+    let snapshot = hosts_snapshot::load(&state.hosts_snapshot);
+    let known: std::collections::HashSet<&str> =
+        snapshot.hosts.iter().map(|h| h.host_key.as_str()).collect();
+    if let Some(unknown) = body
+        .host_keys
+        .iter()
+        .find(|hk| !known.contains(hk.as_str()))
+    {
+        // Log the offending value (Debug-formatted to escape CRLF) so
+        // operators can still diagnose without echoing it to clients.
+        tracing::warn!(
+            unknown_host_key = ?unknown,
+            "🔔 [AlertConfig] bulk apply rejected: unknown host_key"
+        );
+        return Err(AppError::BadRequest(
+            "one or more host_key entries are not registered".into(),
+        ));
     }
 
     let rows = alert_configs_repo::bulk_upsert_host_configs(
