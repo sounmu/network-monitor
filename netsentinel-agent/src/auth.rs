@@ -30,17 +30,17 @@ pub(crate) fn init_decoding_key(secret: &[u8]) -> Result<(), &'static str> {
         .map_err(|_| "DECODING_KEY was already initialized")
 }
 
+/// A syntactically-valid HS256 JWT signed with a throwaway secret. Used
+/// only by the missing-header timing-equalisation path below — never
+/// returned to the caller as a successful auth.
+const DUMMY_TOKEN: &str = "eyJhbGciOiJIUzI1NiJ9.eyJleHAiOjAsImF1ZCI6ImFnZW50In0.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+
 pub(crate) async fn auth_middleware(req: Request, next: Next) -> Result<Response, StatusCode> {
     let auth_header = req
         .headers()
         .get("Authorization")
         .and_then(|val| val.to_str().ok())
         .filter(|s| s.starts_with("Bearer "));
-
-    let token = match auth_header {
-        Some(s) => &s[7..],
-        None => return Err(StatusCode::UNAUTHORIZED),
-    };
 
     let Some(key) = DECODING_KEY.get() else {
         tracing::error!("❌ [Auth] DECODING_KEY not initialized — rejecting request");
@@ -60,7 +60,23 @@ pub(crate) async fn auth_middleware(req: Request, next: Next) -> Result<Response
     // token lifetime — no practical extension of attacker replay windows.
     validation.leeway = 30;
 
-    match decode::<Claims>(token, key, &validation) {
+    // Run a decode pass even when the header is missing or malformed.
+    // The previous shape returned 401 immediately on `None`, so
+    // "missing header" responses came back microseconds faster than
+    // "wrong signature" responses — a tiny but technically-real timing
+    // oracle for "is auth even configured?". Decoding `DUMMY_TOKEN`
+    // costs the same handful of µs as the real path; the result is
+    // discarded so a legitimate parse-success against a bogus token
+    // can never grant access.
+    let token = auth_header.map(|s| &s[7..]).unwrap_or(DUMMY_TOKEN);
+    let result = decode::<Claims>(token, key, &validation);
+
+    if auth_header.is_none() {
+        let _ = result;
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
+    match result {
         Ok(_) => Ok(next.run(req).await),
         Err(e) => {
             tracing::warn!(err = ?e, "⚠️ [Auth] JWT validation failed");

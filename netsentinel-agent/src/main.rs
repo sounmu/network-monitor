@@ -109,28 +109,44 @@ async fn main() -> anyhow::Result<()> {
         )
         .route("/system-info", get(system_info_handler))
         .layer(compression)
-        .layer(middleware::from_fn(auth::auth_middleware))
-        // Health endpoint is outside the auth layer — no JWT required.
-        // Useful for operators to verify the agent process is running
-        // independently of network/auth issues with the server.
-        .route(
-            "/health",
-            get({
+        .layer(middleware::from_fn(auth::auth_middleware));
+
+    // Health endpoint is outside the auth layer — no JWT required.
+    // Useful for operators to verify the agent process is running
+    // independently of network/auth issues with the server.
+    //
+    // Default response is the bare minimum required for a probe to
+    // call the agent "alive" — `{"status":"ok"}`. The previous
+    // verbose payload exposed `version` and `uptime_secs` to anyone
+    // who could reach `AGENT_BIND` (defaults to `0.0.0.0:9101`),
+    // giving an attacker on the LAN free intel for CVE matching
+    // and patch-cadence inference. Set `AGENT_HEALTH_VERBOSE=true`
+    // to opt back in (private nets, ops dashboards behind auth).
+    let health_verbose = std::env::var("AGENT_HEALTH_VERBOSE")
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false);
+    let app = app.route(
+        "/health",
+        get({
+            let hostname = hostname.clone();
+            move || {
                 let hostname = hostname.clone();
-                move || {
-                    let hostname = hostname.clone();
-                    let uptime = start_time.elapsed().as_secs();
-                    async move {
+                let uptime = start_time.elapsed().as_secs();
+                async move {
+                    if health_verbose {
                         axum::Json(serde_json::json!({
                             "status": "ok",
                             "hostname": hostname,
                             "version": env!("CARGO_PKG_VERSION"),
                             "uptime_secs": uptime,
                         }))
+                    } else {
+                        axum::Json(serde_json::json!({ "status": "ok" }))
                     }
                 }
-            }),
-        );
+            }
+        }),
+    );
 
     let addr = format!("{}:{}", bind_addr, port);
     let listener = TcpListener::bind(&addr)
@@ -148,7 +164,21 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("🛑 Shutting down agent...");
     docker_handle.abort();
     stats_handle.abort();
-    tracing::info!("✅ Agent shutdown complete.");
+    // Wait briefly for the aborted tasks to actually drop their resources.
+    // `abort()` only sends a cancellation signal — drop of `bollard::Docker`
+    // and the in-flight HTTP/Unix socket handles happens during the next
+    // `.await` of the task, which can take a few hundred ms on a busy
+    // host. A 2 s timeout is plenty for clean teardown but bounds the
+    // worst-case shutdown latency for `launchctl unload` /
+    // `systemctl stop` callers; if the join overruns we log + exit so
+    // the process supervisor doesn't escalate to SIGKILL.
+    let drain = async {
+        let _ = tokio::join!(docker_handle, stats_handle);
+    };
+    match tokio::time::timeout(std::time::Duration::from_secs(2), drain).await {
+        Ok(_) => tracing::info!("✅ Agent shutdown complete."),
+        Err(_) => tracing::warn!("⚠️ Background tasks did not drain within 2 s; exiting anyway."),
+    }
 
     Ok(())
 }
