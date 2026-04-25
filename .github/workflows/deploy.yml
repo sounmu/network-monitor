@@ -82,6 +82,15 @@ jobs:
           ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
 
       - name: Sync source to server
+        # `data/` holds the live SQLite files (`netsentinel.db`,
+        # `netsentinel.db-wal`, `netsentinel.db-shm`) that the server
+        # process opens with mmap + WAL — rsync's `--delete` can't
+        # unlink them while the server is running, which surfaces as
+        # `Permission denied (13)` and a non-zero exit (code 23). The
+        # source repo never contains a `data/` directory (gitignored),
+        # so excluding it from the sync leaves the running DB
+        # untouched. Same rationale for `*.db*` glob: any stray copy
+        # somewhere outside `data/` should also stay put.
         run: |
           rsync -azP --delete \
             --exclude '.git/' \
@@ -89,6 +98,10 @@ jobs:
             --exclude 'node_modules/' \
             --exclude '.next/' \
             --exclude 'pgdata/' \
+            --exclude 'data/' \
+            --exclude '*.db' \
+            --exclude '*.db-wal' \
+            --exclude '*.db-shm' \
             --exclude '.env' \
             --exclude '*.env' \
             -e "ssh -i ~/.ssh/deploy_key" \
