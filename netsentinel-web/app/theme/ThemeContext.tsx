@@ -14,39 +14,52 @@ const ThemeContext = createContext<ThemeContextValue>({
   toggleTheme: () => {},
 });
 
+/// Resolve the initial theme from the same sources the inline FOUC
+/// killer in `app/layout.tsx` consults — localStorage > system
+/// preference > "light". Returning the resolved value from the lazy
+/// initializer means React's first render already paints with the
+/// correct CSS variables; the inline script keeps this in sync with
+/// the `data-theme` attribute so styles apply pre-hydration.
+function readInitialTheme(): Theme {
+  if (typeof window === "undefined") return "light";
+  try {
+    const stored = window.localStorage.getItem("theme");
+    if (stored === "dark" || stored === "light") return stored;
+    return window.matchMedia("(prefers-color-scheme: dark)").matches
+      ? "dark"
+      : "light";
+  } catch {
+    return "light";
+  }
+}
+
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [theme, setTheme] = useState<Theme>("light");
-  const [mounted, setMounted] = useState(false);
+  // Lazy initializer runs once on the client. SSR uses the
+  // `typeof window === "undefined"` early-out and lands on "light";
+  // hydration converges to the persisted value via the inline FOUC
+  // bootstrap script in `app/layout.tsx`, so there is no visible flash.
+  const [theme, setTheme] = useState<Theme>(readInitialTheme);
 
-  // Read stored theme on mount to avoid SSR hydration mismatch.
-  // localStorage / matchMedia are browser-only — we must initialise state
-  // after hydration, which is exactly the shape react-hooks/set-state-in-effect
-  // flags. The rule is intentionally suppressed here.
-  /* eslint-disable react-hooks/set-state-in-effect */
+  // Side effects (DOM attribute write + localStorage persist) live in
+  // an effect that *reads* `theme`, never inside the `setState` updater.
+  // The previous implementation had `localStorage.setItem` and
+  // `document.documentElement.setAttribute` *inside* the `setTheme`
+  // updater, which violates React 19's purity rule (updaters must be
+  // pure functions of prev state). React was free to call the updater
+  // twice in dev StrictMode and produce duplicate writes; the new
+  // shape side-steps that entirely.
   useEffect(() => {
-    const stored = localStorage.getItem("theme");
-    if (stored === "dark" || stored === "light") {
-      setTheme(stored);
-    } else if (window.matchMedia("(prefers-color-scheme: dark)").matches) {
-      setTheme("dark");
-    }
-    setMounted(true);
-  }, []);
-  /* eslint-enable react-hooks/set-state-in-effect */
-
-  // Sync data-theme attribute
-  useEffect(() => {
-    if (!mounted) return;
     document.documentElement.setAttribute("data-theme", theme);
-  }, [theme, mounted]);
+    try {
+      localStorage.setItem("theme", theme);
+    } catch {
+      // Private mode or quota exhaustion — theme still works for the
+      // session, just doesn't persist across reloads.
+    }
+  }, [theme]);
 
   const toggleTheme = useCallback(() => {
-    setTheme((prev) => {
-      const next = prev === "light" ? "dark" : "light";
-      localStorage.setItem("theme", next);
-      document.documentElement.setAttribute("data-theme", next);
-      return next;
-    });
+    setTheme((prev) => (prev === "light" ? "dark" : "light"));
   }, []);
 
   const value = useMemo(() => ({ theme, toggleTheme }), [theme, toggleTheme]);
