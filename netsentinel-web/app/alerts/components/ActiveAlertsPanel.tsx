@@ -83,6 +83,10 @@ export function ActiveAlertsPanel({ onCountChange }: Props) {
                 <Link
                   className="alerts-btn alerts-btn--sm alerts-btn--tonal"
                   href={`/host/?key=${encodeURIComponent(alert.host_key)}`}
+                  // See `app/page.tsx` for the rationale — static export
+                  // with query-string keying makes Next's prefetcher 404
+                  // against ServeDir; click-time hydration is unaffected.
+                  prefetch={false}
                 >
                   <ArrowRight size={12} aria-hidden="true" />
                   {t.alerts.active.viewHost}

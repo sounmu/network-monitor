@@ -210,6 +210,16 @@ export default function HomePage() {
                             >
                               <Link
                                 href={`/host/?key=${encodeURIComponent(host.host_key)}`}
+                                // `prefetch={false}` because Next.js fetches the route
+                                // chunk by walking `/host/?key=…` in dev/preview mode,
+                                // which our `output: 'export'` + `ServeDir` setup
+                                // resolves to a 404 (the static asset lives at
+                                // `/host/index.html`, query string is irrelevant to
+                                // ServeDir). Disabling prefetch keeps the navigation
+                                // path identical (Next still hydrates the cached
+                                // chunk on click) without the noisy 404s in server
+                                // logs and DevTools Network panel.
+                                prefetch={false}
                                 style={{ color: "inherit", textDecoration: "none" }}
                               >
                                 {host.display_name}
