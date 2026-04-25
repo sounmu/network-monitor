@@ -59,7 +59,13 @@ function getPresetRange(minutes: number): { start: Date; end: Date } {
   return { start: new Date(end.getTime() - minutes * 60 * 1000), end };
 }
 
-function formatAxisTime(ts: string, rangeHours: number, locale: string): string {
+// Recharts hands the tick formatter a numeric epoch ms (the value
+// from the X-axis `domain`). The previous shape converted that number
+// to an ISO string at the call site, then this function called
+// `new Date(isoString)` — a pointless round-trip through string
+// formatting and parsing on every tick render. Take `number` directly
+// so `new Date(ms)` is a single allocation per tick.
+function formatAxisTime(ts: number, rangeHours: number, locale: string): string {
   const d = new Date(ts);
   const loc = locale === "ko" ? "ko-KR" : "en-US";
   if (rangeHours <= 1) return d.toLocaleTimeString(loc, { hour: "2-digit", minute: "2-digit", second: "2-digit" });
@@ -223,7 +229,7 @@ const ChartCard = memo(function ChartCard({
               // produces ~6 ticks so physical overlap is a non-issue.
               interval={0}
               minTickGap={40}
-              tickFormatter={(val) => formatAxisTime(new Date(val).toISOString(), rangeHours, locale)}
+              tickFormatter={(val) => formatAxisTime(val as number, rangeHours, locale)}
               tick={{ fill: "var(--text-muted)", fontSize: 10 }}
               tickLine={false}
               axisLine={{ stroke: "var(--border-subtle)" }}
