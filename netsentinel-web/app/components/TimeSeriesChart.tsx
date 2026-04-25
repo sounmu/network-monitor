@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useCallback, useEffect, memo } from "react";
+import { useState, useMemo, useCallback, memo } from "react";
 import useSWR from "swr";
 import { useSSE } from "@/app/lib/sse-context";
 import {
@@ -292,53 +292,44 @@ export default function TimeSeriesChart({ hostKey }: TimeSeriesChartProps) {
     return { start, end, preset: "1h" };
   });
 
-  // For live presets (1m, 5m) the window must roll in step with real
-  // time — otherwise SSE-pushed data past the click-time `range.end`
-  // renders outside the domain or gets clipped, and the rightmost tick
-  // label never reflects "now".
-  //
-  // Cadence rationale:
-  //   The previous 1 s setInterval was driving a cascading recompute
-  //   chain (`effectiveRange` → `timeTicks` → `<XAxis domain>`) that
-  //   shifted every existing data point by ~1/60 of the chart width
-  //   each second — a 1 Hz discrete step that the eye perceives as a
-  //   "jump" right after each SSE-pushed point arrives. The agent
-  //   scrape interval is 10 s, so a finer cadence than that produces
-  //   no new data — only re-positions the same points.
-  //
-  //   Snapping the tick to a 5 s grid trades sub-second X-axis
-  //   smoothness for a single positional update halfway between SSE
-  //   arrivals. The right-edge tick label updates twice per scrape
-  //   cycle, which is plenty for "live" feel without cascading every
-  //   second through Recharts. Most production live charts (Datadog,
-  //   Grafana realtime panels) use 5–10 s cadences for the same
-  //   reason.
-  //
-  //   `setNowTick` must still fire immediately on preset entry —
-  //   waiting for the first interval would leave a 0–5 s window where
-  //   the chart points at a stale slice. Deferred to a microtask so
-  //   the synchronous-set-in-effect lint doesn't trip.
-  const isLivePreset = range.preset === "1m" || range.preset === "5m";
-  const [nowTick, setNowTick] = useState<number>(() => Date.now());
-  useEffect(() => {
-    if (!isLivePreset) return;
-    queueMicrotask(() => setNowTick(Date.now()));
-    const id = setInterval(() => setNowTick(Date.now()), 5000);
-    return () => clearInterval(id);
-  }, [isLivePreset, range.preset]);
-
-  const effectiveRange = useMemo<TimeRange>(() => {
-    if (!isLivePreset) return range;
-    const windowMs = range.preset === "1m" ? 60_000 : 300_000;
-    return {
-      start: new Date(nowTick - windowMs),
-      end: new Date(nowTick),
-      preset: range.preset,
-    };
-  }, [range, isLivePreset, nowTick]);
-
   const { metricsMap } = useSSE();
   const liveMetrics = metricsMap[hostKey] ?? null;
+
+  // For live presets (1m, 5m) the window rolls in step with **incoming
+  // data**, not wall clock — Grafana-realtime style. The chart's right
+  // edge anchors to the most recent SSE-pushed `liveMetrics.timestamp`
+  // (every ~10 s), so each shift coincides with new content arriving
+  // rather than the chart drifting on its own between scrapes.
+  //
+  // Earlier wall-clock-based cadences (1 s `nowTick` setInterval and
+  // 5 s coarse grid) both produced the same complaint at different
+  // pitches — small frequent stutter vs. larger periodic jumps. The
+  // root cause was decoupling chart movement from data arrival; once
+  // those are tied together, every motion has a meaning ("a new
+  // sample landed") and the chart looks intentional, not jittery.
+  //
+  // Initial mount fallback uses `Date.now()` captured by the lazy
+  // `useState` initializer; once an SSE event lands the anchor jumps
+  // to that timestamp and stays in sync from there.
+  const isLivePreset = range.preset === "1m" || range.preset === "5m";
+  const [initialAnchorTs] = useState<number>(() => Date.now());
+  const liveAnchorTs = useMemo(() => {
+    if (!isLivePreset) return null;
+    if (liveMetrics?.timestamp) {
+      return new Date(liveMetrics.timestamp).getTime();
+    }
+    return initialAnchorTs;
+  }, [isLivePreset, liveMetrics, initialAnchorTs]);
+
+  const effectiveRange = useMemo<TimeRange>(() => {
+    if (!isLivePreset || liveAnchorTs == null) return range;
+    const windowMs = range.preset === "1m" ? 60_000 : 300_000;
+    return {
+      start: new Date(liveAnchorTs - windowMs),
+      end: new Date(liveAnchorTs),
+      preset: range.preset,
+    };
+  }, [range, isLivePreset, liveAnchorTs]);
 
   const swrKey = useMemo(
     () =>
