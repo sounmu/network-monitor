@@ -171,8 +171,20 @@ async fn scrape_all(
             .unwrap_or(state.scrape_interval_secs);
         let host_interval = Duration::from_secs(scrape_interval_secs);
 
+        // Slack on the "is host due?" check to absorb 1-Hz scheduler
+        // jitter. Without it the cadence drifts by exactly one tick
+        // (1 s) per scrape: the outer loop tick fires at T = 0, 1, 2, …
+        // but `last_attempt` is stamped via `Instant::now()` *after*
+        // tick fire (T = 0 + ε). At T = host_interval the elapsed comes
+        // out as `host_interval − ε`, which is `< host_interval`, so the
+        // comparison treats the host as "not yet due" and we skip until
+        // T = host_interval + 1. That turned a configured 10 s scrape
+        // into an effective ~11 s SSE cadence. 500 ms is generous
+        // enough for any realistic clock jitter while still firing
+        // strictly before the next interval boundary.
+        const SCHEDULER_SLACK: Duration = Duration::from_millis(500);
         if let Some(last_attempt) = last_scrape_attempt.get(&host.host_key)
-            && last_attempt.elapsed() < host_interval
+            && last_attempt.elapsed() + SCHEDULER_SLACK < host_interval
         {
             continue;
         }
@@ -182,7 +194,11 @@ async fn scrape_all(
         {
             let power = backoff.consecutive_failures.min(MAX_BACKOFF_POWER);
             let wait = host_interval * 2u32.pow(power);
-            if backoff.last_attempt.elapsed() < wait {
+            // Same `SCHEDULER_SLACK` rationale as above — the backoff
+            // wait is wall-clock derived but checked at 1-Hz tick
+            // resolution, so without slack a `wait = 10 s` would also
+            // drift by one tick per cycle.
+            if backoff.last_attempt.elapsed() + SCHEDULER_SLACK < wait {
                 continue;
             }
         }
