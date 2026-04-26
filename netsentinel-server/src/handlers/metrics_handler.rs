@@ -10,8 +10,7 @@ use serde::Deserialize;
 
 use crate::errors::AppError;
 use crate::models::app_state::{
-    AppState, CacheWeight, MetricsQueryCache, metrics_cache_key_with_raw_boundary,
-    should_cache_metrics_range_after,
+    AppState, CacheWeight, MetricsQueryCache, metrics_cache_key, should_cache_metrics_range,
 };
 use crate::repositories::metrics_repo::{self, ChartMetricsRow, MetricsRow, UptimeSummary};
 use crate::repositories::{http_monitors_repo, ping_monitors_repo};
@@ -41,12 +40,12 @@ where
 {
     let start_ts = start.timestamp();
     let end_ts = end.timestamp();
-    if !should_cache_metrics_range_after(start_ts, end_ts, raw_boundary_secs) {
+    if !should_cache_metrics_range(start_ts, end_ts, raw_boundary_secs) {
         let rows = fetch().await?;
         return Ok(Arc::new(rows));
     }
 
-    let key = metrics_cache_key_with_raw_boundary(host_key, start_ts, end_ts, raw_boundary_secs);
+    let key = metrics_cache_key(host_key, start_ts, end_ts, raw_boundary_secs);
     if let Some(cached) = cache.get(&key) {
         return Ok(cached);
     }

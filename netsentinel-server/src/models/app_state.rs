@@ -418,20 +418,14 @@ pub struct MetricsQueryCache<T> {
     max_bytes: usize,
 }
 
-/// Build a cache key from query parameters using the default 6 h raw
-/// boundary that the full-metrics endpoints use.
+/// Build a cache key from query parameters.
 ///
 /// Rounds timestamps so near-identical dashboard queries collapse onto a
-/// shared cache entry. Raw keys (≤6 h) use 10 s buckets, rollup (6 h–14 d)
-/// uses 60 s buckets, and wide re-aggregation (>14 d) uses 300 s buckets.
-/// Chart callers go through `metrics_cache_key_with_raw_boundary` with a
-/// tighter 1 h raw boundary.
-pub fn metrics_cache_key(host_key: &str, start_ts: i64, end_ts: i64) -> String {
-    const RAW_BOUNDARY_SECS: i64 = 6 * 3600;
-    metrics_cache_key_with_raw_boundary(host_key, start_ts, end_ts, RAW_BOUNDARY_SECS)
-}
-
-pub fn metrics_cache_key_with_raw_boundary(
+/// shared cache entry. Keys for ranges ≤ `raw_boundary_secs` use 10 s
+/// buckets, ranges within 14 d use 60 s buckets, and wide re-aggregation
+/// (> 14 d) uses 300 s buckets. The full-metrics endpoints pass a 6 h
+/// raw boundary; the chart endpoint passes 1 h.
+pub fn metrics_cache_key(
     host_key: &str,
     start_ts: i64,
     end_ts: i64,
@@ -452,19 +446,10 @@ pub fn metrics_cache_key_with_raw_boundary(
     format!("{host_key}:{start_rounded}:{end_rounded}")
 }
 
-/// Whether a `[start, end]` range should be cached at all. The full-metrics
-/// raw branch (≤6 h) is excluded because live dashboards already get SWR
-/// dedup + SSE live samples and the indexed read is cheap.
-pub fn should_cache_metrics_range(start_ts: i64, end_ts: i64) -> bool {
-    const RAW_BOUNDARY_SECS: i64 = 6 * 3600;
-    should_cache_metrics_range_after(start_ts, end_ts, RAW_BOUNDARY_SECS)
-}
-
-pub fn should_cache_metrics_range_after(
-    start_ts: i64,
-    end_ts: i64,
-    raw_boundary_secs: i64,
-) -> bool {
+/// Whether a `[start, end]` range should be cached at all. Ranges
+/// inside the raw window are excluded because live dashboards already
+/// get SWR dedup + SSE live samples and the indexed read is cheap.
+pub fn should_cache_metrics_range(start_ts: i64, end_ts: i64, raw_boundary_secs: i64) -> bool {
     (end_ts - start_ts).max(0) > raw_boundary_secs
 }
 
@@ -845,16 +830,17 @@ mod tests {
         // silently resurfaces — live dashboards would see stale data again
         // (see the comment on `metrics_cache_key`).
         let start: i64 = 1_700_000_000;
-        let k_live = metrics_cache_key("h", start, start + 5 * 60);
-        let k_rollup = metrics_cache_key("h", start, start + 12 * 3600);
-        let k_wide = metrics_cache_key("h", start, start + 30 * 86400);
+        let raw_boundary: i64 = 6 * 3600;
+        let k_live = metrics_cache_key("h", start, start + 5 * 60, raw_boundary);
+        let k_rollup = metrics_cache_key("h", start, start + 12 * 3600, raw_boundary);
+        let k_wide = metrics_cache_key("h", start, start + 30 * 86400, raw_boundary);
         assert_ne!(k_live, k_rollup, "live vs rollup must not collide");
         assert_ne!(k_rollup, k_wide, "rollup vs wide must not collide");
 
         // Live tier advances one bucket after a 10 s shift (frontend's own
         // live rounding granularity in `api.ts`). Pin the boundary so a
         // regression to a coarser server bucket is caught immediately.
-        let k_live_next = metrics_cache_key("h", start + 10, start + 10 + 5 * 60);
+        let k_live_next = metrics_cache_key("h", start + 10, start + 10 + 5 * 60, raw_boundary);
         assert_ne!(
             k_live, k_live_next,
             "10 s shift on live range must cross a bucket boundary"
@@ -864,13 +850,26 @@ mod tests {
     #[test]
     fn should_cache_range_excludes_raw_window_only() {
         // The full-metrics endpoint refuses to cache anything ≤ 6 h.
-        assert!(!should_cache_metrics_range(0, 6 * 3600));
-        assert!(should_cache_metrics_range(0, 6 * 3600 + 1));
+        let full_boundary: i64 = 6 * 3600;
+        assert!(!should_cache_metrics_range(0, full_boundary, full_boundary));
+        assert!(should_cache_metrics_range(
+            0,
+            full_boundary + 1,
+            full_boundary
+        ));
 
         // The chart endpoint passes its own 1 h boundary.
-        let one_hour: i64 = 3600;
-        assert!(!should_cache_metrics_range_after(0, one_hour, one_hour));
-        assert!(should_cache_metrics_range_after(0, one_hour + 1, one_hour));
+        let chart_boundary: i64 = 3600;
+        assert!(!should_cache_metrics_range(
+            0,
+            chart_boundary,
+            chart_boundary
+        ));
+        assert!(should_cache_metrics_range(
+            0,
+            chart_boundary + 1,
+            chart_boundary
+        ));
     }
 
     #[test]
