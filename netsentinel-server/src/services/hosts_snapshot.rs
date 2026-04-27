@@ -65,12 +65,46 @@ pub fn empty() -> SharedHostsSnapshot {
 /// any clone of the underlying containers. On lock poisoning, returns the
 /// last valid snapshot via `into_inner` so a writer panic does not bring
 /// down the entire scrape cycle.
+///
+/// Poisoning is a real bug, not background noise — emit `error!` (not
+/// `warn!`) so an observability stack with severity routing actually pages
+/// somebody. `RwLock::into_inner` clears the poison flag, leaving the
+/// in-memory state potentially inconsistent with the DB; the caller of
+/// `refresh()` (or the 60 s background tick) will reseed from disk on the
+/// next pass, but until then writers may overwrite a recovered-from-panic
+/// snapshot silently. Callers that have a `DbPool` available should prefer
+/// `load_or_reseed` so a panicked writer is followed by an immediate DB
+/// reseed instead of waiting up to 60 s.
 pub fn load(cell: &SharedHostsSnapshot) -> Arc<HostsSnapshot> {
     match cell.read() {
         Ok(guard) => guard.clone(),
         Err(poisoned) => {
-            tracing::warn!("⚠️ [HostsSnapshot] RwLock poisoned on read, recovering");
+            tracing::error!(
+                "❌ [HostsSnapshot] RwLock poisoned on read, recovering with stale snapshot — \
+                 background tick will reseed within 60s"
+            );
             poisoned.into_inner().clone()
+        }
+    }
+}
+
+/// Same as [`load`] but, on poison, schedules an immediate DB reseed in the
+/// background instead of waiting on the 60 s ticker. The returned snapshot
+/// is the recovered (possibly stale) one — the reseed lands asynchronously.
+pub fn load_or_reseed(pool: &crate::db::DbPool, cell: &SharedHostsSnapshot) -> Arc<HostsSnapshot> {
+    match cell.read() {
+        Ok(guard) => guard.clone(),
+        Err(poisoned) => {
+            tracing::error!(
+                "❌ [HostsSnapshot] RwLock poisoned on read, recovering and triggering immediate reseed"
+            );
+            let recovered = poisoned.into_inner().clone();
+            let pool = pool.clone();
+            let cell = cell.clone();
+            tokio::spawn(async move {
+                refresh(&pool, &cell).await;
+            });
+            recovered
         }
     }
 }
@@ -107,7 +141,7 @@ pub fn apply_system_info(cell: &SharedHostsSnapshot, host_key: &str, info: &Syst
     match cell.write() {
         Ok(mut guard) => *guard = new_snapshot,
         Err(poisoned) => {
-            tracing::warn!("⚠️ [HostsSnapshot] RwLock poisoned on apply_system_info, recovering");
+            tracing::error!("❌ [HostsSnapshot] RwLock poisoned on apply_system_info, recovering");
             *poisoned.into_inner() = new_snapshot;
         }
     }
@@ -138,7 +172,7 @@ pub async fn refresh(pool: &crate::db::DbPool, cell: &SharedHostsSnapshot) {
     match cell.write() {
         Ok(mut guard) => *guard = new_snapshot,
         Err(poisoned) => {
-            tracing::warn!("⚠️ [HostsSnapshot] RwLock poisoned on write, recovering");
+            tracing::error!("❌ [HostsSnapshot] RwLock poisoned on write, recovering");
             *poisoned.into_inner() = new_snapshot;
         }
     }

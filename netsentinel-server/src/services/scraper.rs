@@ -144,7 +144,11 @@ async fn scrape_all(
     // on every mutation handler (create/update/delete host, upsert/delete
     // alert config) and also by a 60 s background tick as a backstop.
     // Top-10 review finding #10.
-    let snapshot = hosts_snapshot::load(&state.hosts_snapshot);
+    // Hot read on every cycle. Use the reseed-aware variant so a poisoned
+    // RwLock (writer panic) is followed by an immediate background DB reseed
+    // instead of serving the recovered (potentially stale) snapshot for up
+    // to 60 s until the periodic ticker fires.
+    let snapshot = hosts_snapshot::load_or_reseed(&state.db_pool, &state.hosts_snapshot);
 
     // Pre-register any newly added hosts in last_known_status
     state.pre_populate_status(&snapshot.hosts);
