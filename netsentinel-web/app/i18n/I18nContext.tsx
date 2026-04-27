@@ -32,15 +32,24 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
   // exactly the shape react-hooks/set-state-in-effect flags. Suppressed.
   /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
-    const saved = localStorage.getItem(STORAGE_KEY) as Locale | null;
-    if (saved && locales.includes(saved)) {
-      setLocaleState(saved);
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY) as Locale | null;
+      if (saved && locales.includes(saved)) {
+        setLocaleState(saved);
+      }
+    } catch {
+      // Safari private mode / restricted storage — fall back to default.
     }
   }, []);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   const setLocale = useCallback((next: Locale) => {
-    localStorage.setItem(STORAGE_KEY, next);
+    try {
+      localStorage.setItem(STORAGE_KEY, next);
+    } catch {
+      // Quota or private-mode write rejection — keep the in-memory state
+      // change so the UI still flips this session, just without persistence.
+    }
     setLocaleState(next);
   }, []);
 

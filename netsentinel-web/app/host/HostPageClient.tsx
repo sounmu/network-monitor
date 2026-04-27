@@ -2,6 +2,7 @@
 
 import dynamic from "next/dynamic";
 import { notFound, useRouter, useSearchParams } from "next/navigation";
+import { useEffect, useState } from "react";
 import useSWR from "swr";
 import { useSSE } from "@/app/lib/sse-context";
 import { fetcher, getHostsUrl } from "@/app/lib/api";
@@ -30,15 +31,34 @@ import {
 import { useI18n } from "@/app/i18n/I18nContext";
 
 /** Format uptime from boot_time (Unix timestamp seconds).
- *  <24h → "Xh Xm", ≥24h → "Xd Xh" */
-function formatUptime(bootTime: number): string {
-  const now = Math.floor(Date.now() / 1000);
-  const secs = Math.max(now - bootTime, 0);
+ *  <24h → "Xh Xm", ≥24h → "Xd Xh"
+ *
+ *  Pure function — `now` is supplied by the caller so the same render input
+ *  always yields the same output. React 19's compiler is allowed to memoize
+ *  components that call this; reading `Date.now()` inside would silently
+ *  freeze the displayed uptime once the component is cached. The caller
+ *  drives ticks via `useNowSeconds` below. */
+function formatUptime(bootTime: number, nowSecs: number): string {
+  const secs = Math.max(nowSecs - bootTime, 0);
   const minutes = Math.floor(secs / 60) % 60;
   const hours = Math.floor(secs / 3600) % 24;
   const days = Math.floor(secs / 86400);
   if (days > 0) return `${days}d ${hours}h`;
   return `${hours}h ${minutes}m`;
+}
+
+/** A re-rendering "now" in unix-seconds, ticking every minute. Anything
+ *  finer than that is wasted re-renders since `formatUptime` rounds to
+ *  minutes anyway. Initial value is taken from `Date.now()` lazily so the
+ *  initial render still produces accurate output without waiting for the
+ *  first interval tick. */
+function useNowSeconds(): number {
+  const [now, setNow] = useState<number>(() => Math.floor(Date.now() / 1000));
+  useEffect(() => {
+    const id = setInterval(() => setNow(Math.floor(Date.now() / 1000)), 60_000);
+    return () => clearInterval(id);
+  }, []);
+  return now;
 }
 
 function SectionCard({
@@ -81,6 +101,7 @@ export default function HostPageClient() {
 
   const { metricsMap, statusMap, isConnected } = useSSE();
   const { t } = useI18n();
+  const nowSecs = useNowSeconds();
 
   // Deterministic "does this host exist?" probe. We don't trust the SSE
   // race — `isConnected` flips true the instant the EventSource opens
@@ -90,10 +111,14 @@ export default function HostPageClient() {
   // emit a `status` event at all made the race permanent. A single
   // SWR fetch against `/api/hosts` gives us a definitive answer:
   // either the key is in the list (valid page) or it isn't (real 404).
+  //
+  // Refresh on a 60 s cadence + on tab focus so an admin who deletes/adds
+  // a host in another tab does not leave this page stuck on a stale
+  // notFound() decision indefinitely.
   const { data: hostsList, error: hostsError } = useSWR<Array<{ host_key: string }>>(
     getHostsUrl(),
     fetcher,
-    { refreshInterval: 0, revalidateOnFocus: false }
+    { refreshInterval: 60_000, revalidateOnFocus: true }
   );
 
   const liveMetrics = metricsMap[decodedHostKey] ?? null;
@@ -199,7 +224,7 @@ export default function HostPageClient() {
               <div className="info-bar-item">
                 <Clock size={14} color="var(--text-muted)" />
                 <span style={{ fontSize: 12 }}>
-                  {t.host.uptime}: {formatUptime(statusData.boot_time)}
+                  {t.host.uptime}: {formatUptime(statusData.boot_time, nowSecs)}
                 </span>
               </div>
               <div className="info-bar-separator" />
