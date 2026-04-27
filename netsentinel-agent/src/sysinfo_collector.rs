@@ -24,6 +24,9 @@ static CPU_WARMED_UP: AtomicBool = AtomicBool::new(false);
 /// recovered, just not re-logged).
 static DISK_IO_POISON_LOGGED: AtomicBool = AtomicBool::new(false);
 static NET_PREV_POISON_LOGGED: AtomicBool = AtomicBool::new(false);
+static SYS_POISON_LOGGED: AtomicBool = AtomicBool::new(false);
+static NETS_POISON_LOGGED: AtomicBool = AtomicBool::new(false);
+static COMPS_POISON_LOGGED: AtomicBool = AtomicBool::new(false);
 use sysinfo::{Components, DiskUsage, Disks, Networks, System};
 
 use crate::gpu;
@@ -284,7 +287,15 @@ pub(crate) async fn collect_sysinfo() -> SysinfoResult {
 
     // sysinfo collection runs on a separate blocking thread.
     let sys_handle = tokio::task::spawn_blocking(|| {
-        let mut sys = SYS.lock().unwrap_or_else(|e| e.into_inner());
+        let mut sys = SYS.lock().unwrap_or_else(|e| {
+            if !SYS_POISON_LOGGED.swap(true, Ordering::Relaxed) {
+                tracing::warn!(
+                    "SYS mutex was poisoned, recovering (further \
+                     occurrences suppressed for the lifetime of this process)"
+                );
+            }
+            e.into_inner()
+        });
 
         // Three-phase CPU delta measurement.
         // macOS (and some Linux kernels) require three refresh_processes calls
@@ -359,7 +370,15 @@ pub(crate) async fn collect_sysinfo() -> SysinfoResult {
         prune_disk_io_cache(&disks_raw);
 
         // Aggregate physical interface traffic + per-interface breakdown.
-        let mut nets = NETS.lock().unwrap_or_else(|e| e.into_inner());
+        let mut nets = NETS.lock().unwrap_or_else(|e| {
+            if !NETS_POISON_LOGGED.swap(true, Ordering::Relaxed) {
+                tracing::warn!(
+                    "NETS mutex was poisoned, recovering (further \
+                     occurrences suppressed for the lifetime of this process)"
+                );
+            }
+            e.into_inner()
+        });
         // `refresh(true)` keeps known interfaces and just updates their
         // counters; it does NOT remove interfaces that have disappeared
         // since the previous refresh. After a suspend/resume cycle (or
@@ -461,7 +480,15 @@ pub(crate) async fn collect_sysinfo() -> SysinfoResult {
         }
 
         // Temperature sensors
-        let mut components = COMPS.lock().unwrap_or_else(|e| e.into_inner());
+        let mut components = COMPS.lock().unwrap_or_else(|e| {
+            if !COMPS_POISON_LOGGED.swap(true, Ordering::Relaxed) {
+                tracing::warn!(
+                    "COMPS mutex was poisoned, recovering (further \
+                     occurrences suppressed for the lifetime of this process)"
+                );
+            }
+            e.into_inner()
+        });
         components.refresh(true); // refresh in place
         let temperatures: Vec<TemperatureInfo> = components
             .iter()
