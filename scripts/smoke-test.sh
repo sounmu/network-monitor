@@ -87,7 +87,7 @@ if [[ -n "$auth_json" ]]; then
   fi
 else
   say_fail "/api/auth/status did not respond" \
-    "older server build missing the endpoint? upgrade to v0.3.6+"
+    "older server build missing the endpoint? upgrade to v0.4+"
   NEXT_STEP="open ${BASE_URL}/"
 fi
 
@@ -96,7 +96,7 @@ if curl -sf --max-time 3 "${BASE_URL}/host/?key=smoke-test:9101" > /dev/null 2>&
   say_pass "/host/?key=… static shell served"
 else
   say_fail "/host/?key=… did not respond" \
-    "the web bundle may be stale — rebuild with 'docker compose up -d --build server'"
+    "the web bundle may be stale — update with 'docker compose pull server && docker compose up -d server'"
 fi
 
 echo
