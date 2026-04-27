@@ -1,6 +1,6 @@
 # After Install — first admin, first host, first agent
 
-This page covers everything that happens *after* `docker compose up -d --build` finishes. Target time: **10 minutes** from a fresh clone to "the dashboard is showing real metrics from a real machine".
+This page covers everything that happens *after* `docker compose pull server && docker compose up -d server` finishes. Target time: **10 minutes** from a fresh clone to "the dashboard is showing real metrics from a real machine".
 
 If anything below fails, run `./scripts/doctor.sh` — it prints the exact next command for each broken check.
 
@@ -50,7 +50,7 @@ Click **Create admin** → you are redirected to `/login` → sign in with the s
 > ```bash
 > docker compose down
 > rm data/netsentinel.db data/netsentinel.db-wal data/netsentinel.db-shm
-> docker compose up -d
+> docker compose up -d server
 > ```
 >
 > This wipes **all** state (users, hosts, metrics, alerts). If you only want to reset the admin account, sign in at `/login` instead.
@@ -91,24 +91,21 @@ curl -fsSL https://raw.githubusercontent.com/sounmu/netsentinel/main/scripts/ins
   | sudo bash -s -- \
       --jwt-secret "PASTE_THE_JWT_SECRET_HERE" \
       --bind "0.0.0.0" \
-      --port 9101 \
-      --ref main
+      --port 9101
 
 # Tailscale-only exposure: register 100.x.y.z:9101 in the hub.
 curl -fsSL https://raw.githubusercontent.com/sounmu/netsentinel/main/scripts/install-agent.sh \
   | sudo bash -s -- \
       --jwt-secret "PASTE_THE_JWT_SECRET_HERE" \
       --bind "100.x.y.z" \
-      --port 9101 \
-      --ref main
+      --port 9101
 
 # Custom port: register <agent-ip>:9200 in the hub.
 curl -fsSL https://raw.githubusercontent.com/sounmu/netsentinel/main/scripts/install-agent.sh \
   | sudo bash -s -- \
       --jwt-secret "PASTE_THE_JWT_SECRET_HERE" \
       --bind "0.0.0.0" \
-      --port 9200 \
-      --ref main
+      --port 9200
 ```
 
 Read back the shared secret from the hub's `.env`:
@@ -120,11 +117,13 @@ grep ^JWT_SECRET= .env | cut -d= -f2-
 
 The installer:
 
-1. Checks for `git` and `cargo` (prints install commands if missing).
-2. Clones the NetSentinel repo and installs `netsentinel-agent` via `cargo install --path` into `/usr/local/bin`.
-3. Writes `/etc/netsentinel/agent.env` with the JWT + port (chmod 600).
-4. Drops `/etc/systemd/system/netsentinel-agent.service` (Linux) or `/Library/LaunchDaemons/dev.netsentinel.agent.plist` (macOS), enables and starts it.
-5. Prints the exact `host_key` — `<lan-ip>:9101` — you should paste into the hub UI.
+1. Detects Linux/macOS + amd64/arm64.
+2. Downloads `netsentinel-agent-<platform>.tar.gz` from GitHub Releases.
+3. Verifies the archive against the release `SHA256SUMS`.
+4. Installs `netsentinel-agent` into `/usr/local/bin`.
+5. Writes `/etc/netsentinel/agent.env` with the JWT + port (chmod 600).
+6. Drops `/etc/systemd/system/netsentinel-agent.service` (Linux) or `/Library/LaunchDaemons/dev.netsentinel.agent.plist` (macOS), enables and starts it.
+7. Prints the exact `host_key` — `<lan-ip>:9101` — you should paste into the hub UI.
 
 Optional flags:
 
@@ -133,7 +132,8 @@ Optional flags:
 --bind 192.168.1.10    # only bind to a specific interface
 --bind 100.x.y.z       # Tailscale-only native agent exposure
 --prefix /opt          # binary goes to /opt/bin instead of /usr/local/bin
---ref v0.3.5           # build a specific tag / branch
+--ref v0.4.2           # install a specific GitHub Release tag
+--build-from-source    # build from --repo/--ref instead of downloading a release
 --uninstall            # stop + remove service, binary, and /etc/netsentinel/
 ```
 
@@ -147,7 +147,7 @@ curl -fsSL https://raw.githubusercontent.com/sounmu/netsentinel/main/scripts/ins
       --jwt-secret "PASTE_THE_JWT_SECRET_HERE" \
       --bind "0.0.0.0" \
       --port 9101 \
-      --ref main
+      --ref v0.4.2
 ```
 
 On Linux, the installer creates a systemd unit that reads
@@ -169,18 +169,18 @@ Back in the hub UI, the `Agents` row flips from `pending` → `online` within on
 | Agent service keeps restarting | `sudo journalctl -u netsentinel-agent --since '1 min ago'` — look for JWT / bind errors |
 | Agent is up (port listens) but hub says `pending` | `docker compose exec server curl -v http://<host>:<port>/metrics` from the hub — if curl times out, open the firewall on the agent host |
 | Hub logs say `401` / `403` | JWT_SECRET mismatch — recopy the hub's `.env` value into `/etc/netsentinel/agent.env` then `sudo systemctl restart netsentinel-agent` |
-| Hub logs say `bincode decode error` | Agent built from a ref more than one minor release away from the hub. Rebuild one side: re-run the installer with matching `--ref` |
+| Hub logs say `bincode decode error` | Agent release does not match the hub wire format. Re-run the installer with the matching `--ref <release-tag>` |
 
-### 4.3 Offline alternative (no curl|bash)
+### 4.3 Source-build alternative
 
-If the target host can't reach GitHub, clone and build manually:
+If you need an unreleased branch, local fork, or unsupported platform, build from source:
 
 ```bash
-git clone https://github.com/sounmu/netsentinel.git
-cd netsentinel/netsentinel-agent
-cp .env.example .env          # set JWT_SECRET + AGENT_PORT
-cargo build --release
-./target/release/netsentinel-agent
+curl -fsSL https://raw.githubusercontent.com/sounmu/netsentinel/main/scripts/install-agent.sh \
+  | sudo bash -s -- \
+      --jwt-secret "PASTE_THE_JWT_SECRET_HERE" \
+      --build-from-source \
+      --ref main
 ```
 
 Register the same `<lan-ip>:<AGENT_PORT>` in the hub's Agents page.
@@ -219,9 +219,9 @@ You now have:
 | Dashboard shows "No agents registered" | No host added yet | See Step 3 |
 | Host stuck at `pending` | Agent not running / JWT mismatch / server can't reach `host:port` | See Step 4.3 |
 | Browser shows "Host Not Found" on `/host/?key=…` | You edited the URL to a value that isn't in `/api/hosts` | Register the host first (Step 3) |
-| `/setup` returns 404 or redirects to `/login` | Admin already provisioned | Sign in at `/login`; reset via `TRUNCATE users` in Postgres if you truly need a fresh setup |
+| `/setup` returns 404 or redirects to `/login` | Admin already provisioned | Sign in at `/login`; delete `data/netsentinel.db*` only if you truly need a fresh setup |
 | `./scripts/smoke-test.sh` fails on `/api/health` | Server container still starting, or DB is unreachable | `docker compose logs --tail=60 server` — look for DATABASE_URL / migration errors |
 | `./scripts/doctor.sh` flags `JWT_SECRET is shorter than 32 characters` | Manual edit, or leftover from an older example | Re-run `./scripts/bootstrap.sh --force` to regenerate the secret (⚠️ invalidates every existing agent's JWT — you will need to recopy the new value to each agent) |
-| Port `3000` already in use | Another service owns it | Set `SERVER_PORT=XXXX` in `.env` and `docker compose up -d` again |
+| Port `3000` already in use | Another service owns it | Set `SERVER_PORT=XXXX` in `.env` and `docker compose up -d server` again |
 
 For production-specific concerns (Cloudflare Tunnel, TLS, custom hostname, reverse proxy), see [`docs/DEPLOYMENT.md`](DEPLOYMENT.md).

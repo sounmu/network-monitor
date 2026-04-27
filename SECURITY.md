@@ -25,8 +25,8 @@ Instead, please email the maintainer directly at the email address listed in the
 
 | Version | Supported |
 |---------|-----------|
-| 1.x     | Yes       |
-| < 1.0   | No        |
+| >= 0.4  | Yes       |
+| < 0.4   | No        |
 
 ## Security Best Practices for Self-Hosters
 

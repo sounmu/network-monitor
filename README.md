@@ -97,7 +97,7 @@ On the machine that will run the dashboard + API:
 curl -fsSL https://raw.githubusercontent.com/sounmu/netsentinel/main/scripts/install-hub.sh | bash
 ```
 
-It clones the repo into `~/netsentinel`, generates `.env` with random secrets, runs `docker compose up -d --build`, verifies the install with a 5-check smoke test, and prints the URL + the JWT_SECRET you'll need for the agent step below.
+It clones the repo into `~/netsentinel`, generates `.env` with random secrets, pulls the published `ghcr.io/sounmu/netsentinel-server` image, starts the hub, verifies the install with a 5-check smoke test, and prints the URL + the JWT_SECRET you'll need for the agent step below.
 
 Prerequisites: Docker + Compose v2, `git`, `curl`, `openssl`. Tested on Linux and macOS; Windows users should run this inside WSL2.
 
@@ -110,13 +110,12 @@ curl -fsSL https://raw.githubusercontent.com/sounmu/netsentinel/main/scripts/ins
   | sudo bash -s -- \
       --jwt-secret "PASTE_THE_HUB_SECRET_HERE" \
       --bind "0.0.0.0" \
-      --port 9101 \
-      --ref main
+      --port 9101
 ```
 
-Use `--bind "100.x.y.z"` to listen only on the agent's Tailscale interface, or change `--port` and register the matching `<agent-ip>:<port>` in the hub. The installer builds the agent binary, drops a systemd unit (Linux) or launchd daemon (macOS), starts the service, and prints the exact `host_key` you should paste into the hub's Agents page. Re-run the same command later with `--ref <tag-or-branch>` to update the native agent in place.
+Use `--bind "100.x.y.z"` to listen only on the agent's Tailscale interface, or change `--port` and register the matching `<agent-ip>:<port>` in the hub. The installer downloads the matching prebuilt agent from GitHub Releases, verifies `SHA256SUMS`, drops a systemd unit (Linux) or launchd daemon (macOS), starts the service, and prints the exact `host_key` you should paste into the hub's Agents page. Re-run the same command later with `--ref <release-tag>` to pin or update the native agent in place.
 
-> The agent currently builds from source via `cargo install` — if the target machine does not have Rust, the installer prints the one-line rustup command to run first. Phase B will publish prebuilt binaries via GitHub Releases so this step becomes a pure download.
+> Need an unreleased branch or local fork? Add `--build-from-source --ref <branch-or-tag>`; that path requires `git` and the Rust toolchain.
 
 ### Register the host in the UI
 
@@ -133,15 +132,16 @@ cd ~/netsentinel
 ./scripts/doctor.sh        # laddered diagnosis, tells you the exact recovery command
 ```
 
-### Offline / air-gapped install
+### Manual install
 
-When the one-liner can't reach GitHub (corporate proxy, offline lab, etc.), run the same three steps by hand:
+When you do not want to pipe the installer into a shell, run the same steps by hand:
 
 ```bash
 git clone https://github.com/sounmu/netsentinel.git
 cd netsentinel
 ./scripts/bootstrap.sh            # generates .env
-docker compose up -d --build
+docker compose pull server
+docker compose up -d server
 ./scripts/smoke-test.sh
 ```
 
@@ -188,8 +188,9 @@ cargo run
 | Variable | Required | Default | Description |
 |---|---|---|---|
 | `JWT_SECRET` | **Yes** | — | HS256 secret (≥ 32 chars). Every agent needs the same value. `bootstrap.sh` generates it via `openssl rand -hex 32`. |
+| `NETSENTINEL_VERSION` | No | `latest` | Docker image tag for `ghcr.io/sounmu/netsentinel-server`. Pin a release tag such as `v0.4.2` for reproducible installs. |
 | `CLOUDFLARE_TUNNEL_TOKEN` | No | — | Cloudflare Tunnel token. Only read when you activate the `tunnel` service via a compose override — see [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md). |
-| `NEXT_PUBLIC_API_URL` | No | empty (same-origin) | Backend URL the **browser** fetches from. Empty = same-origin, correct for localhost and single-hostname reverse proxies. Override only when the dashboard and API live on different hostnames — see [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md). Baked into the web bundle at build time; changing this value requires `docker compose up -d --build server`. |
+| `NEXT_PUBLIC_API_URL` | No | empty (same-origin) | Build-time web setting for custom local images. The published image is built for same-origin deployments, which is the recommended homelab path. Split-origin deployments should build with `docker-compose.dev.yml` or put dashboard/API behind one reverse-proxy hostname. |
 
 > Upgrading from v0.3.x? The old `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` variables are no longer read — remove them from `.env`. There is nothing to migrate if this is a greenfield install. See the v0.4.0 section of [`CHANGELOG.md`](./CHANGELOG.md) for how to move data from an existing Postgres deployment.
 

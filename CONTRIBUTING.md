@@ -38,9 +38,10 @@ cd netsentinel
 # 2. Generate .env with random secrets (JWT_SECRET)
 ./scripts/bootstrap.sh
 
-# 3. Start the full stack (single server container serves both API and
-#    the embedded web static bundle)
-docker compose up -d --build
+# 3. Start the published stack (single server container serves both API
+#    and the embedded web static bundle)
+docker compose pull server
+docker compose up -d server
 
 # 4. Verify the install
 ./scripts/smoke-test.sh
@@ -57,7 +58,8 @@ netsentinel/
 ├── netsentinel-server/   # Rust/Axum backend — REST API, scraper, SSE
 ├── netsentinel-agent/    # Rust daemon — collects host metrics
 ├── netsentinel-web/      # Next.js dashboard
-├── docker-compose.yml        # Full stack orchestration
+├── docker-compose.yml        # Pull-only homelab stack
+├── docker-compose.dev.yml    # Local image build stack
 ├── .env.example              # Environment variable template
 └── .github/workflows/        # GitHub Actions CI
 ```
@@ -67,6 +69,12 @@ See [ARCHITECTURE.md](README.md#architecture) in the README for data flow detail
 ---
 
 ## Development Workflow
+
+The root `docker-compose.yml` is the homelab install path and pulls a published image. When you need Docker to build the current checkout, use:
+
+```bash
+docker compose -f docker-compose.dev.yml up -d --build server
+```
 
 ### Server (Rust/Axum)
 
@@ -184,11 +192,11 @@ Tests use [Vitest](https://vitest.dev/). New tests go in `*.test.ts(x)` files co
 
 ### Image tagging
 
-From v0.3.6 there is **one** Docker image — `netsentinel-server` bakes the web static bundle into `/app/static`. The separate `netsentinel-web` image has been removed. Images are tagged with the git short SHA and `latest` on every successful deploy:
+From v0.4.2 there is **one** Docker image — `netsentinel-server` bakes the web static bundle into `/app/static`. The separate `netsentinel-web` image has been removed. Tagged releases publish both the release tag and `latest`:
 
 ```bash
 # CI builds and pushes:
-ghcr.io/sounmu/netsentinel-server:<short-sha>
+ghcr.io/sounmu/netsentinel-server:<release-tag>
 ghcr.io/sounmu/netsentinel-server:latest
 ```
 
@@ -197,15 +205,14 @@ ghcr.io/sounmu/netsentinel-server:latest
 If a deployment causes issues, roll back to a known-good image:
 
 ```bash
-# 1. Find the previous working image tag (git short SHA from the last good release)
-git log --oneline -5          # e.g. 6a0a9d1 is bad, 95afce6 was good
+# 1. Find the previous working release tag
+git tag --sort=-creatordate | head
 
-# 2. Pin docker-compose to the known-good image
-#    Edit docker-compose.yml (or use an override file):
-#      image: ghcr.io/sounmu/netsentinel-server:95afce6
+# 2. Pin docker-compose to the known-good image in .env:
+#      NETSENTINEL_VERSION=v0.4.2
 
 # 3. Redeploy
-docker compose pull && docker compose up -d
+docker compose pull server && docker compose up -d server
 
 # 4. Verify health
 curl -sf http://localhost:3000/api/health

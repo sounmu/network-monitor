@@ -17,11 +17,12 @@ browser ─┬─→ https://dashboard.example.com    (static bundle)
          └─→ https://api.example.com          (Axum API + SSE)
 ```
 
-In that case you must:
+The published `ghcr.io/sounmu/netsentinel-server` image is built for same-origin deployments. In a split-origin deployment you should either put both routes behind one public hostname, or build a custom image with the API hostname baked into the static bundle:
 
 1. Build the web bundle with the API hostname baked in:
    ```bash
-   NEXT_PUBLIC_API_URL=https://api.example.com docker compose up -d --build server
+   NEXT_PUBLIC_API_URL=https://api.example.com \
+     docker compose -f docker-compose.dev.yml up -d --build server
    ```
 2. Add **both** hostnames to `ALLOWED_ORIGINS` in `.env`:
    ```
@@ -48,11 +49,11 @@ services:
     environment:
       - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
     networks:
-      - backend-internal
+      - netsentinel
 
 networks:
-  backend-internal:
-    external: false
+  netsentinel:
+    driver: bridge
 ```
 
 Add `CLOUDFLARE_TUNNEL_TOKEN=…` to `.env` and bring both compose files up:
@@ -83,9 +84,10 @@ NetSentinel migrates the DB schema forward on every server start via `sqlx::migr
 
 ```bash
 cd netsentinel
-git pull                      # get the new release
-docker compose up -d --build  # rebuild + restart
-./scripts/smoke-test.sh       # verify the upgrade
+git pull                         # get the latest compose/scripts/docs
+docker compose pull server       # download the published image
+docker compose up -d server      # restart on the new image
+./scripts/smoke-test.sh          # verify the upgrade
 ```
 
 There is no downtime-safe rolling upgrade yet: `docker compose up` recreates the server container atomically (~a few seconds blackout). DB data survives because `./data/` is a bind-mount — the SQLite file, its `-wal` sidecar, and its `-shm` sidecar all persist across container re-creation.
@@ -96,12 +98,13 @@ There is no downtime-safe rolling upgrade yet: `docker compose up` recreates the
 
 ## 4. Rolling back
 
-The repository tags every release (`v0.3.x`). To roll back to a known-good version:
+The repository tags every release (`v0.4.x+`). To roll back to a known-good version, pin the image tag in `.env`:
 
 ```bash
 cd netsentinel
-git checkout v0.3.5
-docker compose up -d --build
+# edit .env: NETSENTINEL_VERSION=v0.4.2
+docker compose pull server
+docker compose up -d server
 ```
 
 Migrations are forward-only. If you roll back across a migration that added a column or widened a CHECK constraint, the older binary still works against the newer schema — it just won't use the new column. If you roll back across a migration that **removed** something, you will need to restore from a backup.
@@ -154,7 +157,7 @@ Stop the server, replace the files, and start it again:
 docker compose down
 rm data/netsentinel.db data/netsentinel.db-wal data/netsentinel.db-shm
 cp data/backups/netsentinel-YYYY-MM-DD.db data/netsentinel.db
-docker compose up -d
+docker compose up -d server
 ```
 
 The WAL and shm sidecars are regenerated on next open. `./data/` is the canonical storage — snapshot the whole directory if your volume driver supports it.
@@ -163,19 +166,24 @@ The WAL and shm sidecars are regenerated on next open. `./data/` is the canonica
 
 ## 6. Image tagging (for CI pipelines)
 
-Every tagged release on GitHub produces one Docker image per platform:
+Every tagged release on GitHub produces a multi-arch Docker image and matching prebuilt agent binaries:
 
 ```
-ghcr.io/sounmu/netsentinel-server:<short-sha>
+ghcr.io/sounmu/netsentinel-server:<release-tag>
 ghcr.io/sounmu/netsentinel-server:latest
+netsentinel-agent-linux-amd64.tar.gz
+netsentinel-agent-linux-arm64.tar.gz
+netsentinel-agent-darwin-amd64.tar.gz
+netsentinel-agent-darwin-arm64.tar.gz
+SHA256SUMS
 ```
 
-Pin to `<short-sha>` for reproducible deploys:
+Pin to `<release-tag>` for reproducible deploys:
 
 ```yaml
 services:
   server:
-    image: ghcr.io/sounmu/netsentinel-server:6a0a9d1
+    image: ghcr.io/sounmu/netsentinel-server:v0.4.2
 ```
 
 ---
@@ -185,7 +193,6 @@ services:
 | Port | Who listens | Exposed? |
 |---|---|---|
 | `3000` | Axum (API + static web) | Yes, via `docker-compose.yml` `ports:` |
-| `5432` | PostgreSQL | No — internal to `backend-internal` network |
 | `9101` | Agent (default) | Yes, but only on the agent's LAN / tunnel — the server *pulls* |
 
 Nothing else is reachable from outside the stack.
