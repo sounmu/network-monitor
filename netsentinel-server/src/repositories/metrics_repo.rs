@@ -400,10 +400,17 @@ pub async fn insert_metrics_batch(
          networks, docker_containers, ports, disks, \
          processes, temperatures, gpus, \
          cpu_cores, network_interfaces, docker_stats, \
-         rx_bytes_per_sec, tx_bytes_per_sec) ",
+         rx_bytes_per_sec, tx_bytes_per_sec, \
+         total_rx_bytes, total_tx_bytes) ",
     );
 
     qb.push_values(batch, |mut b, (host_key, metrics)| {
+        // SQLite stores INTEGER as i64; the agent-reported counters are u64.
+        // Saturating-cast is the right behaviour: a host that has actually
+        // moved >9 EB on a counter is theoretical-only, but i64 overflow on
+        // the bind would error out the whole batch.
+        let total_rx = i64::try_from(metrics.network.total_rx_bytes).unwrap_or(i64::MAX);
+        let total_tx = i64::try_from(metrics.network.total_tx_bytes).unwrap_or(i64::MAX);
         b.push_bind(host_key.to_string())
             .push_bind(metrics.hostname.clone())
             .push_bind(metrics.is_online)
@@ -423,7 +430,9 @@ pub async fn insert_metrics_batch(
             .push_bind(sqlx::types::Json(&metrics.network_interfaces))
             .push_bind(sqlx::types::Json(&metrics.docker_stats))
             .push_bind(metrics.network.rx_bytes_per_sec)
-            .push_bind(metrics.network.tx_bytes_per_sec);
+            .push_bind(metrics.network.tx_bytes_per_sec)
+            .push_bind(total_rx)
+            .push_bind(total_tx);
     });
 
     qb.build().execute(pool).await?;
@@ -463,21 +472,48 @@ pub async fn insert_offline_metrics_batch(
 }
 
 /// Fetch the most recent 50 metrics for a host, ordered newest first.
+///
+/// Trimmed projection — `processes` / `cpu_cores` / `network_interfaces` /
+/// `ports` / `docker_containers` are returned as NULL because:
+///   1. Only the latest row drives the dashboard's headline summary cards
+///      (cpu / memory / disk / network rate). Older points are catch-up
+///      data, not history — for history the UI calls the chart endpoint.
+///   2. Live updates flow through SSE, so any heavy-JSON snapshot is
+///      already streamed in within seconds of the page mounting.
+///   3. Each row's full snapshot can be tens of KB on hosts with many
+///      processes / containers; 50 rows × that × N hosts cold-loads was a
+///      noticeable dashboard p95 hit before this trim.
+///
+/// Mirrors the ≤6h branch of `fetch_metrics_range` to keep the row shape
+/// consistent across both code paths that feed the same `MetricsRow` type.
 pub async fn fetch_recent_metrics(
     pool: &DbPool,
     host_key: &str,
 ) -> Result<Vec<MetricsRow>, sqlx::Error> {
+    // `total_rx_bytes` / `total_tx_bytes` are now read directly (migration
+    // 0005). The TryFrom path uses these to synthesize `networks` for
+    // headline-card display when the heavy `networks` JSON has been read.
+    // Keep `networks` itself in the projection because it carries
+    // per-interface detail the host card may render (top device, interface
+    // counters); only the totals are needed for the chart-style summary.
     let raws = sqlx::query_as::<_, MetricsRowRaw>(
         r#"
         SELECT id, host_key, display_name, is_online,
                cpu_usage_percent, memory_usage_percent,
                load_1min, load_5min, load_15min,
-               networks, docker_containers, ports, disks,
-               processes, temperatures, gpus,
-               cpu_cores, network_interfaces, docker_stats,
+               networks,
+               NULL AS docker_containers,
+               NULL AS ports,
+               disks,
+               NULL AS processes,
+               temperatures,
+               gpus,
+               NULL AS cpu_cores,
+               NULL AS network_interfaces,
+               docker_stats,
                rx_bytes_per_sec, tx_bytes_per_sec,
-               NULL AS total_rx_bytes,
-               NULL AS total_tx_bytes,
+               total_rx_bytes,
+               total_tx_bytes,
                timestamp
         FROM metrics
         WHERE host_key = ?1
@@ -512,6 +548,8 @@ pub async fn fetch_metrics_range(
     if hours <= 6 {
         // Short range: raw rows. Trim JSON columns the chart layer never
         // reads (ports, docker_containers, cpu_cores, processes).
+        // `total_rx_bytes` / `total_tx_bytes` come from migration 0005's
+        // scalar columns instead of `json_extract(networks, …)` per row.
         let raws = sqlx::query_as::<_, MetricsRowRaw>(
             r#"
             SELECT id, host_key, display_name, is_online,
@@ -529,8 +567,8 @@ pub async fn fetch_metrics_range(
                    docker_stats,
                    rx_bytes_per_sec,
                    tx_bytes_per_sec,
-                   NULL AS total_rx_bytes,
-                   NULL AS total_tx_bytes,
+                   total_rx_bytes,
+                   total_tx_bytes,
                    timestamp
             FROM metrics
             WHERE host_key = ?1
@@ -689,13 +727,25 @@ pub async fn fetch_chart_metrics_range(
     let seconds = duration.num_seconds();
 
     if seconds <= CHART_RAW_BOUNDARY_SECS {
+        // Migration 0005 projects `total_rx_bytes` / `total_tx_bytes` into
+        // their own INTEGER columns. Read them directly. Rows inserted
+        // before 0005 ran will have NULL for these columns; fall back to
+        // the JSON blob in that case so historical queries remain correct
+        // until rolling deploys finish and old raw rows age out (3 day
+        // retention).
         let raws = sqlx::query_as::<_, ChartMetricsRowRaw>(
             r#"
             SELECT id, host_key, display_name, is_online,
                    cpu_usage_percent, memory_usage_percent,
                    load_1min, load_5min, load_15min,
-                   CAST(json_extract(networks, '$.total_rx_bytes') AS INTEGER) AS total_rx_bytes,
-                   CAST(json_extract(networks, '$.total_tx_bytes') AS INTEGER) AS total_tx_bytes,
+                   COALESCE(
+                       total_rx_bytes,
+                       CAST(json_extract(networks, '$.total_rx_bytes') AS INTEGER)
+                   ) AS total_rx_bytes,
+                   COALESCE(
+                       total_tx_bytes,
+                       CAST(json_extract(networks, '$.total_tx_bytes') AS INTEGER)
+                   ) AS total_tx_bytes,
                    rx_bytes_per_sec,
                    tx_bytes_per_sec,
                    disks,
