@@ -5,6 +5,42 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.4.3-beta.2] — 2026-04-28 (pre-release)
+
+Iteration on top of beta.1 focused on lifecycle UX, repository layout, and release-pipeline split. No DB schema changes and no agent ↔ server wire-format changes; existing beta.1 installs upgrade with the same hub/agent commands as before.
+
+### Added
+
+- **Update / remove one-liners.** Four new scripts mirror the install path and complete the documented lifecycle:
+  - `scripts/update-hub.sh` — `git pull` + `docker compose pull/up server` + smoke test, with `--version <tag>` to pin a release and `--skip-git-pull` for image-only refreshes (CI / cron friendly).
+  - `scripts/update-agent.sh` — re-runs the installer using the JWT/port/bind already saved in `/etc/netsentinel/agent.env`, so operators do not paste the JWT secret again on every host.
+  - `scripts/remove-hub.sh` — default-safe stop of the stack (keeps SQLite data + `.env` so re-installs resume cleanly); `--purge` wipes data + config + repo, `--remove-image` also `docker rmi`s the pulled server image.
+  - `scripts/remove-agent.sh` — curl-able standalone uninstaller that tears down the systemd unit / launchd plist, binary, config, and log dir. Functional parity with `install-agent.sh --uninstall` for operators who do not have the installer on hand.
+  README now documents both flows under dedicated **Update** and **Remove** sections.
+- **Manual server-image publish script** (`scripts/publish-server-image.sh`). Maintainers can build and push the multi-arch GHCR image from a local checkout without going through the release workflow.
+
+### Changed
+
+- **Crate directories shortened** to `agent/`, `server/`, `web/` (was `netsentinel-{agent,server,web}/`). Cargo package names follow (`agent`, `server`); `web/package.json` `"name"` is `"web"`. External contracts are deliberately preserved so existing installs need no migration:
+  - Produced binary names stay `netsentinel-{agent,server}` via explicit `[[bin]]` blocks.
+  - Published Docker image stays `ghcr.io/sounmu/netsentinel-server`.
+  - GitHub Release tarballs stay `netsentinel-agent-<platform>.tar.gz`.
+  - systemd unit (`netsentinel-agent.service`), launchd label (`dev.netsentinel.agent`), config path (`/etc/netsentinel/agent.env`), and log dir (`/var/log/netsentinel-agent/`) are unchanged.
+  All internal references — `Dockerfile` `COPY` paths, `.github/workflows/{ci-server,ci-web,release}.yml`, install scripts, deploy script, README / CONTRIBUTING / DEPLOYMENT directory trees and `cd <crate>` snippets, cross-reference comments inside both `Cargo.toml` files — follow the new layout.
+- **Server image publish split out of the release tag workflow.** Pushing a `v*` tag now only builds and uploads agent binaries + checksums to GitHub Releases; `release.yml` no longer builds the GHCR image, no longer requires `packages: write`, and no longer carries `REGISTRY` / `IMAGE_NAME` env vars. Multi-arch image publishing moves to a manual `scripts/publish-server-image.sh` invocation from a maintainer machine. This removes the implicit coupling between cutting a git tag and pushing to GHCR (e.g. emergency tag retractions no longer leave a half-built docker job behind), and contracts the GHCR token surface to a local `docker login` instead of a workflow-scoped `GITHUB_TOKEN`.
+
+### Fixed
+
+- **`install-agent.sh --uninstall` now removes `/var/log/netsentinel-agent/`.** Previous releases left the log directory behind on uninstall; `remove-agent.sh` and the existing `--uninstall` path are now in parity.
+
+### Upgrade notes
+
+1. No schema or wire-format changes from beta.1.
+2. **Hub upgrade:** `bash ~/netsentinel/scripts/update-hub.sh --version v0.4.3-beta.2` (or the same `git pull && docker compose pull server && docker compose up -d server` flow as before).
+3. **Agent upgrade:** `curl -fsSL .../scripts/update-agent.sh | sudo bash -s -- --ref v0.4.3-beta.2` (or rerun `install-agent.sh --ref v0.4.3-beta.2`). The new path reads JWT from `/etc/netsentinel/agent.env` so no secret re-paste is needed.
+4. **Maintainers cutting this tag** must run `scripts/publish-server-image.sh v0.4.3-beta.2` separately from a machine with `docker login ghcr.io` set up, since the tag-push workflow no longer publishes the GHCR image. Prerelease tags should not pass `--latest`.
+5. The directory rename is internal only. If you maintain a `docker-compose.override.yml` with an explicit `dockerfile: netsentinel-server/Dockerfile`, update it to `dockerfile: server/Dockerfile`.
+
 ## [0.4.3-beta.1] — 2026-04-28 (pre-release)
 
 First beta of the "released artefacts" install line. This release moves NetSentinel's default homelab path away from local builds and toward published GHCR images plus GitHub Release agent binaries. It also includes the host-chart API work and a small cluster of server/web hardening fixes that landed on `dev` after v0.4.2.
