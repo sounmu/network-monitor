@@ -1,6 +1,6 @@
 [package]
 name = "netsentinel-agent"
-version = "0.4.2"
+version = "0.4.3-beta.1"
 edition = "2024"
 description = "Lightweight monitoring agent — collects CPU, memory, disk, GPU, Docker, and port metrics"
 license = "Apache-2.0"

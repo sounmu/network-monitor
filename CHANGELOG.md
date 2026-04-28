@@ -5,6 +5,81 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.4.3-beta.1] — 2026-04-28 (pre-release)
+
+First beta of the "released artefacts" install line. This release moves NetSentinel's default homelab path away from local builds and toward published GHCR images plus GitHub Release agent binaries. It also includes the host-chart API work and a small cluster of server/web hardening fixes that landed on `dev` after v0.4.2.
+
+Tagged **pre-release** because the install surface changed materially: the default `docker-compose.yml` now pulls a published image, the agent installer expects release assets by default, and the release workflow is responsible for producing both hub and agent artefacts. Existing v0.4.x SQLite databases do not require a schema migration for this beta.
+
+### Added
+
+- **Published-artefact release workflow** (`.github/workflows/release.yml`). Pushing a `v*` tag now builds and publishes the single hub image to GHCR and attaches native agent archives to the GitHub Release:
+  - `netsentinel-agent-linux-amd64.tar.gz`
+  - `netsentinel-agent-linux-arm64.tar.gz`
+  - `netsentinel-agent-darwin-amd64.tar.gz`
+  - `netsentinel-agent-darwin-arm64.tar.gz`
+  - `SHA256SUMS`
+- **Prebuilt-agent install path** in `scripts/install-agent.sh`. The default installer now detects Linux/macOS + amd64/arm64, downloads the matching GitHub Release archive, verifies it against `SHA256SUMS`, installs the binary, and then writes the same systemd / launchd service as before.
+- **Source-build escape hatch** via `--build-from-source`. Operators testing unreleased branches, forks, or unsupported platforms can still build from `--repo` + `--ref`, but that path is now explicit instead of the default.
+- **Lightweight host chart endpoint** for the web UI. The server exposes a bounded chart projection so host-detail charts can fetch time-series rows without pulling full metric snapshots.
+- **Optional server tunables documented in root `.env.example`**, including cache sizing and SQLite runtime knobs, so production operators can tune without spelunking through server-only examples.
+
+### Changed
+
+- **Default Compose path is pull-only.** `docker-compose.yml` now runs `ghcr.io/sounmu/netsentinel-server:${NETSENTINEL_VERSION:-latest}` instead of building locally. Fresh installs use `docker compose pull server && docker compose up -d server`.
+- **Local Docker builds now use `docker-compose.override.yml`.** The repo no longer carries a separate dev compose file; contributors can layer a local `build:` override without changing the homelab install path, and `.gitignore` excludes `docker-compose.override.{yml,yaml}`.
+- **Hub installer moved to released artefacts.** `scripts/install-hub.sh` clones or updates the checkout, bootstraps `.env`, pulls the published image, starts the hub, runs the smoke test, and prints the agent command. When installing a tagged release, it pins `NETSENTINEL_VERSION=<tag>` in `.env`.
+- **Release workflow no longer promotes prereleases to `latest`.** Tags containing `-` (such as `v0.4.3-beta.1`) publish the versioned GHCR tag only; stable tags continue to update `ghcr.io/sounmu/netsentinel-server:latest`.
+- **Linux agent release binaries now target musl** (`x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`) to avoid glibc-version failures on older homelab distributions. macOS release targets remain native Apple targets.
+- **Install and deployment docs rewritten around the new default path.** README, AFTER_INSTALL, DEPLOYMENT, CONTRIBUTING, `doctor.sh`, `smoke-test.sh`, and `.env.example` now point users at pull-only hub installs and prebuilt agent installs.
+
+### Fixed
+
+- **Host detail refresh race.** The host-detail page now uses `/api/hosts` as a deterministic "does this host exist?" probe instead of racing the first SSE status snapshot, so refreshing a valid host page no longer falls into a false not-found state.
+- **React purity issue in uptime formatting.** `formatUptime` no longer reads `Date.now()` internally; callers pass a minute-ticking value so React compiler caching cannot freeze the displayed uptime.
+- **HostsSnapshot poison recovery.** The server now reseeds the in-memory hosts snapshot eagerly from the database after lock poisoning instead of letting scraper-facing reads operate on a stale or unavailable snapshot.
+- **Email channel validation.** SMTP notification channels now require `smtp_user` and `smtp_pass`, matching the documented channel contract and preventing accidental unauthenticated SMTP attempts.
+- **Agent repeated warning noise.** The agent suppresses repeat mutex-poison warnings for SYS/NETS/COMPS collection paths so one persistent fault does not flood logs.
+- **Pinned hub / agent version alignment.** If `.env` already pins `NETSENTINEL_VERSION`, the hub installer now prints an agent install command with the same `--ref` instead of defaulting the agent to the latest release.
+- **Legacy SSH deploy workflow removed.** The old rsync/SSH deployment workflow is gone; releases now flow through tagged artefacts instead of a single private server deployment job.
+
+### Security & hardening
+
+- **macOS LaunchDaemon no longer exposes `JWT_SECRET`.** The installer writes secrets only to `/etc/netsentinel/agent.env` with `chmod 600`. The launchd plist now executes a small wrapper script and contains no JWT, port, or bind secret values.
+- **Agent archive checksum verification.** Release installs require a matching line in `SHA256SUMS` and verify the downloaded tarball with `sha256sum` or `shasum -a 256` before installation.
+- **Pinned hub installs avoid accidental image drift.** Tagged installs set `NETSENTINEL_VERSION=<tag>` so a later `docker compose pull` keeps the operator on the intended hub image unless they explicitly change the tag.
+
+### Performance
+
+- **Network totals projected into scalar columns.** The server now stores total network counters in dedicated columns, reducing repeated JSON extraction work for recent metrics and chart queries.
+- **Monitor scraper cache.** Enabled HTTP/ping monitors are cached and the scraper is aligned to Tokio intervals, reducing periodic database reads and scheduler drift.
+- **Chart API byte cache is bounded.** The lightweight chart endpoint uses byte-aware caching so a few wide requests cannot grow memory without a cap.
+- **Metrics cache helper cleanup.** Cache boundary logic is collapsed into one helper, reducing duplicated edge handling across metric range code paths.
+
+### Web
+
+- **Host-detail charts switched to the lightweight chart endpoint.** The dashboard now uses the narrower server projection for chart data and keeps full metric snapshots for views that actually need them.
+- **i18n local-storage guard.** Locale storage access is guarded so browser storage failures do not break the provider tree.
+- **Host-detail SWR refresh.** The host existence probe refreshes periodically and on focus so deleting or re-adding hosts in another tab converges without a hard reload.
+
+### Upgrade notes
+
+1. Existing v0.4.x SQLite data remains compatible; no manual DB migration is required.
+2. For the hub, run:
+   ```bash
+   git pull
+   docker compose pull server
+   docker compose up -d server
+   ./scripts/smoke-test.sh
+   ```
+3. For agents, rerun the installer with the matching tag once the release assets are available:
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/sounmu/netsentinel/v0.4.3-beta.1/scripts/install-agent.sh \
+     | sudo bash -s -- --jwt-secret "PASTE_THE_HUB_SECRET_HERE" --ref v0.4.3-beta.1
+   ```
+4. If you intentionally need an unreleased branch or local fork, add `--build-from-source --ref <branch-or-tag>`.
+5. This is a beta release. Keep `NETSENTINEL_VERSION` pinned to `v0.4.3-beta.1` while testing; do not rely on `latest` for beta deployments.
+
 ## [0.4.1] — 2026-04-20
 
 First non-pre-release of the SQLite + single-container line. Focused on installation UX, agent flexibility, and documentation positioning. No schema changes; upgrading from a working v0.4.0 install is a `git pull && docker compose up -d --build server` away.

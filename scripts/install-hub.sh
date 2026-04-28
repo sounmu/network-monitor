@@ -61,11 +61,13 @@ else
   echo "ℹ️  .env already exists at ${INSTALL_DIR}/.env — keeping it."
 fi
 
-if [[ "$REF" == v* ]] && ! grep -q '^NETSENTINEL_VERSION=' .env; then
+image_ref="$(grep -E '^NETSENTINEL_VERSION=' .env 2>/dev/null | tail -n1 | cut -d= -f2- || true)"
+if [[ -z "$image_ref" && "$REF" == v* ]]; then
   {
     echo
     echo "NETSENTINEL_VERSION=${REF}"
   } >> .env
+  image_ref="$REF"
   echo "✅ Pinned server image tag to ${REF} in .env"
 fi
 
@@ -93,8 +95,8 @@ jwt="$(grep ^JWT_SECRET= .env | cut -d= -f2-)"
 port="$(grep ^SERVER_PORT= .env 2>/dev/null | cut -d= -f2- || true)"
 port="${port:-3000}"
 agent_ref_arg=""
-if [[ "$REF" == v* ]]; then
-  agent_ref_arg=" --ref \"${REF}\""
+if [[ "$image_ref" == v* ]]; then
+  agent_ref_arg=" --ref \"${image_ref}\""
 fi
 lan_ip=""
 if command -v hostname >/dev/null 2>&1 && hostname -I >/dev/null 2>&1; then
