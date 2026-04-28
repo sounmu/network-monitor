@@ -17,18 +17,31 @@ browser ─┬─→ https://dashboard.example.com    (static bundle)
          └─→ https://api.example.com          (Axum API + SSE)
 ```
 
-The published `ghcr.io/sounmu/netsentinel-server` image is built for same-origin deployments. In a split-origin deployment you should either put both routes behind one public hostname, or build a custom image with the API hostname baked into the static bundle:
+The published `ghcr.io/sounmu/netsentinel-server` image is built for same-origin deployments. In a split-origin deployment you should either put both routes behind one public hostname, or build a custom image with the API hostname baked into the static bundle.
 
-1. Build the web bundle with the API hostname baked in:
+The custom-build path uses a `docker-compose.override.yml` next to the base compose file. Compose automatically merges it on top of `docker-compose.yml`, and the override is `.gitignore`d so it never leaks back into the upstream:
+
+1. Create `docker-compose.override.yml`:
+   ```yaml
+   services:
+     server:
+       image: netsentinel-server:custom
+       build:
+         context: .
+         dockerfile: netsentinel-server/Dockerfile
+         args:
+           - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-}
+   ```
+2. Build with the API hostname baked in:
    ```bash
    NEXT_PUBLIC_API_URL=https://api.example.com \
-     docker compose -f docker-compose.dev.yml up -d --build server
+     docker compose up -d --build server
    ```
-2. Add **both** hostnames to `ALLOWED_ORIGINS` in `.env`:
+3. Add **both** hostnames to `ALLOWED_ORIGINS` in `.env`:
    ```
    ALLOWED_ORIGINS=https://dashboard.example.com,https://api.example.com
    ```
-3. Make sure the reverse proxy forwards SSE correctly (`proxy_buffering off` for nginx, or native WebSocket/SSE handling for Caddy / Traefik).
+4. Make sure the reverse proxy forwards SSE correctly (`proxy_buffering off` for nginx, or native WebSocket/SSE handling for Caddy / Traefik).
 
 ---
 

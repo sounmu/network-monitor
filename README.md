@@ -190,7 +190,7 @@ cargo run
 | `JWT_SECRET` | **Yes** | — | HS256 secret (≥ 32 chars). Every agent needs the same value. `bootstrap.sh` generates it via `openssl rand -hex 32`. |
 | `NETSENTINEL_VERSION` | No | `latest` | Docker image tag for `ghcr.io/sounmu/netsentinel-server`. Pin a release tag such as `v0.4.2` for reproducible installs. |
 | `CLOUDFLARE_TUNNEL_TOKEN` | No | — | Cloudflare Tunnel token. Only read when you activate the `tunnel` service via a compose override — see [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md). |
-| `NEXT_PUBLIC_API_URL` | No | empty (same-origin) | Build-time web setting for custom local images. The published image is built for same-origin deployments, which is the recommended homelab path. Split-origin deployments should build with `docker-compose.dev.yml` or put dashboard/API behind one reverse-proxy hostname. |
+| `NEXT_PUBLIC_API_URL` | No | empty (same-origin) | Build-time web setting for custom local images. The published image is built for same-origin deployments, which is the recommended homelab path. Split-origin deployments should either build a custom image via a `docker-compose.override.yml` (see [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)) or put dashboard/API behind one reverse-proxy hostname. |
 
 > Upgrading from v0.3.x? The old `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` variables are no longer read — remove them from `.env`. There is nothing to migrate if this is a greenfield install. See the v0.4.0 section of [`CHANGELOG.md`](./CHANGELOG.md) for how to move data from an existing Postgres deployment.
 

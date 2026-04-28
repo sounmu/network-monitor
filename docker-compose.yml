@@ -1,8 +1,10 @@
 services:
   # NetSentinel hub: Rust API + embedded Next.js static dashboard.
   # The default homelab path pulls a published image instead of building
-  # locally. Use docker-compose.dev.yml when you are changing code and
-  # need to rebuild the server image from this checkout.
+  # locally. To rebuild from a checkout (or pin to your own image, attach
+  # an external network, add a Cloudflare Tunnel sidecar, etc.) drop a
+  # `docker-compose.override.yml` next to this file — compose merges it
+  # automatically and the override stays out of git.
   server:
     image: ghcr.io/sounmu/netsentinel-server:${NETSENTINEL_VERSION:-latest}
     restart: unless-stopped

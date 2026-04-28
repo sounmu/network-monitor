@@ -59,7 +59,6 @@ netsentinel/
 ├── netsentinel-agent/    # Rust daemon — collects host metrics
 ├── netsentinel-web/      # Next.js dashboard
 ├── docker-compose.yml        # Pull-only homelab stack
-├── docker-compose.dev.yml    # Local image build stack
 ├── .env.example              # Environment variable template
 └── .github/workflows/        # GitHub Actions CI
 ```
@@ -70,10 +69,22 @@ See [ARCHITECTURE.md](README.md#architecture) in the README for data flow detail
 
 ## Development Workflow
 
-The root `docker-compose.yml` is the homelab install path and pulls a published image. When you need Docker to build the current checkout, use:
+The root `docker-compose.yml` is the homelab install path and pulls a published image. When you need Docker to build the current checkout instead, drop a `docker-compose.override.yml` next to it — `docker compose` automatically merges any file with that name on top of the base, so the override stays untracked (`.gitignore`d) and never leaks into the upstream:
+
+```yaml
+# docker-compose.override.yml — untracked, per-host
+services:
+  server:
+    image: netsentinel-server:dev
+    build:
+      context: .
+      dockerfile: netsentinel-server/Dockerfile
+      args:
+        - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-}
+```
 
 ```bash
-docker compose -f docker-compose.dev.yml up -d --build server
+docker compose up -d --build server
 ```
 
 ### Server (Rust/Axum)
