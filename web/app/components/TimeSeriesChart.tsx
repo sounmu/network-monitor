@@ -71,7 +71,10 @@ function formatAxisTime(ts: number, rangeHours: number, locale: string): string 
   const loc = locale === "ko" ? "ko-KR" : "en-US";
   if (rangeHours <= 1) return d.toLocaleTimeString(loc, { hour: "2-digit", minute: "2-digit", second: "2-digit" });
   if (rangeHours <= 24) return d.toLocaleTimeString(loc, { hour: "2-digit", minute: "2-digit" });
-  return d.toLocaleDateString(loc, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  // > 24 h (7d / 30d / wide custom): drop the time component. Combined
+  // hour+minute labels here got truncated by the rotated tick width and
+  // added no useful resolution at tick spacings of several hours.
+  return d.toLocaleDateString(loc, { month: "short", day: "numeric" });
 }
 
 /**

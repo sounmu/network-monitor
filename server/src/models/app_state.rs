@@ -865,8 +865,11 @@ mod tests {
             full_boundary
         ));
 
-        // The chart endpoint passes its own 1 h boundary.
-        let chart_boundary: i64 = 3600;
+        // The chart endpoint passes its own ~1 h boundary (62 min, see
+        // `metrics_repo::CHART_RAW_BOUNDARY_SECS`). This test only pins
+        // the boundary semantics (`<= boundary` does not cache, `>` does);
+        // the literal value mirrors the constant for readability.
+        let chart_boundary: i64 = 62 * 60;
         assert!(!should_cache_metrics_range(
             0,
             chart_boundary,

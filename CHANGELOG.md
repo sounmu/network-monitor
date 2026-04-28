@@ -5,6 +5,90 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.4.3] — 2026-04-28
+
+Stable release of the "released artefacts" install line. This promotes the
+0.4.3 beta series after real install testing on macOS, Ubuntu, GHCR, and the
+new update/remove lifecycle scripts. Existing v0.4.x SQLite databases do not
+require a schema migration, and there are no agent ↔ server wire-format
+changes from v0.4.2.
+
+### Added
+
+- **Pull-first hub installs.** The default `docker-compose.yml` now pulls
+  `ghcr.io/sounmu/netsentinel-server:${NETSENTINEL_VERSION:-latest}` instead
+  of building locally, so fresh homelab installs no longer need Rust, Node, or
+  a source build on the hub machine.
+- **Prebuilt native agent installs.** `scripts/install-agent.sh` detects
+  Linux/macOS + amd64/arm64, downloads the matching GitHub Release archive,
+  verifies it against `SHA256SUMS`, installs the binary, and writes the same
+  systemd or launchd service as the source-build path.
+- **Update and remove one-liners.** New `update-hub.sh`, `update-agent.sh`,
+  `remove-hub.sh`, and `remove-agent.sh` scripts cover the normal operator
+  lifecycle: image refresh, agent binary refresh without re-pasting JWT,
+  safe hub stop, and full agent teardown.
+- **Manual server image publishing.** `scripts/publish-server-image.sh` builds
+  and pushes the multi-arch GHCR image from a maintainer machine. It provisions
+  a dedicated `docker-container` buildx builder automatically and refuses to
+  promote prerelease tags to `latest`.
+
+### Changed
+
+- **Release workflow scope is smaller.** Tag pushes now build and upload only
+  the native agent archives plus `SHA256SUMS`. GHCR image publishing is an
+  explicit local maintainer step, which avoids long QEMU-backed Docker jobs in
+  GitHub Actions and removes `packages: write` from the workflow token surface.
+- **Internal source directories were shortened** from
+  `netsentinel-{agent,server,web}/` to `agent/`, `server/`, and `web/`.
+  External contracts stay stable: binary names, Docker image name, release
+  archive names, service names, config paths, and log paths are unchanged.
+- **Linux release agents are musl builds** (`x86_64-unknown-linux-musl`,
+  `aarch64-unknown-linux-musl`) to avoid glibc baseline failures on older
+  homelab distributions.
+- **Local Docker rebuilds use `docker-compose.override.yml`.** The tracked
+  compose file stays pull-only; contributors can add a local override for
+  `build:` without changing the default install path.
+
+### Fixed
+
+- **Pinned hub and agent versions now stay aligned.** Tagged hub installs pin
+  `NETSENTINEL_VERSION=<tag>`, and the printed / updater agent commands use
+  the same `--ref` instead of drifting to latest.
+- **`update-agent.sh` fetches the installer from the ref it installs.** A
+  pinned update such as `--ref v0.4.3` now pulls the matching tagged
+  `install-agent.sh`; only `--ref latest` uses `main` by default.
+- **macOS bash 3.2 compatibility for `update-agent.sh`.** Empty extra-argument
+  arrays no longer trip `set -u` with `EXTRA_ARGS[@]: unbound variable`.
+- **1-hour host charts stay on raw metrics.** The chart raw boundary now allows
+  the frontend's minute-rounded cache key window, so the 1h preset no longer
+  silently degrades to 5-minute rollups.
+- **Long-range chart tick labels no longer truncate time text.** 7d/30d/wide
+  custom ranges now use date-only axis labels where the tick spacing is already
+  several hours or more.
+- **Agent uninstall cleanup removes `/var/log/netsentinel-agent/`.**
+
+### Security & hardening
+
+- **macOS LaunchDaemon plists no longer contain `JWT_SECRET`.** Secrets live in
+  `/etc/netsentinel/agent.env` with `chmod 600`; launchd runs a wrapper that
+  sources that root-owned config.
+- **Agent release archives are checksum-verified** before installation with
+  `sha256sum` or `shasum -a 256`.
+- **Tagged prereleases are not promoted to `latest`.** Stable tags can publish
+  `latest` manually with `scripts/publish-server-image.sh vX.Y.Z --latest`;
+  prerelease tags are rejected if `--latest` is passed.
+
+### Upgrade notes
+
+1. Publish the server image before announcing the release:
+   `scripts/publish-server-image.sh v0.4.3 --latest`.
+2. Upgrade a hub with:
+   `bash ~/netsentinel/scripts/update-hub.sh --version v0.4.3`.
+3. Upgrade agents with:
+   `curl -fsSL https://raw.githubusercontent.com/sounmu/netsentinel/v0.4.3/scripts/update-agent.sh | sudo bash -s -- --ref v0.4.3`.
+4. If you keep a local `docker-compose.override.yml` that references old
+   `netsentinel-server/Dockerfile` paths, update it to `server/Dockerfile`.
+
 ## [0.4.3-beta.3] — 2026-04-28 (pre-release)
 
 Bug-fix iteration on top of beta.2 — repairs the two release-pipeline scripts introduced in that beta after they were exercised against a real maintainer machine. No DB schema changes and no agent ↔ server wire-format changes.

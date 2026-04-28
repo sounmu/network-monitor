@@ -17,8 +17,9 @@ use crate::repositories::{http_monitors_repo, ping_monitors_repo};
 use crate::services::auth::UserGuard;
 
 /// Default raw boundary used by the full-metrics endpoints (≤ 6 h is never
-/// cached). The lightweight chart endpoint passes its own 1 h boundary via
-/// `metrics_repo::CHART_RAW_BOUNDARY_SECS`.
+/// cached). The lightweight chart endpoint passes its own ~1 h boundary
+/// via `metrics_repo::CHART_RAW_BOUNDARY_SECS` (see that constant for why
+/// it is 62 min, not exactly 60 min).
 const FULL_METRICS_RAW_BOUNDARY_SECS: i64 = 6 * 3600;
 
 /// Resolve a single (host_key, time-range) query against a metrics cache,

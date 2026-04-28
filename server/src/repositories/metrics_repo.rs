@@ -8,7 +8,19 @@ use serde_json::Value;
 
 use crate::models::agent_metrics::{AgentMetrics, DiskInfo, DockerContainerStats, TemperatureInfo};
 
-pub const CHART_RAW_BOUNDARY_SECS: i64 = 60 * 60;
+/// Upper bound (inclusive) for the chart endpoint's raw-rows branch.
+///
+/// Semantically this is "1 hour": a `1h` preset on the host detail page
+/// should hit the raw 10-second metrics table, not the 5-minute rollup.
+/// The literal value is **62 minutes** to absorb the frontend's
+/// cache-key rounding in `web/app/lib/api.ts::getMetricsChartRangeUrl`,
+/// which `floor`s `start` to a minute boundary and `ceil`s `end` to the
+/// next minute boundary. That can inflate the requested window by up
+/// to 2 × 60 s − 2 ms ≈ 120 s. A naive 3600 s boundary missed almost
+/// every real `1h` request and silently degraded the chart to 5-minute
+/// resolution; 3720 s keeps `1h` on raw without bleeding into the next
+/// preset (`6h` = 21600 s, far above this).
+pub const CHART_RAW_BOUNDARY_SECS: i64 = 62 * 60;
 
 pub mod kst_date_format {
     use super::*;
