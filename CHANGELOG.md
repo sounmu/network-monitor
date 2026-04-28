@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.4.3-beta.3] — 2026-04-28 (pre-release)
+
+Bug-fix iteration on top of beta.2 — repairs the two release-pipeline scripts introduced in that beta after they were exercised against a real maintainer machine. No DB schema changes and no agent ↔ server wire-format changes.
+
+### Fixed
+
+- **`update-agent.sh` now fetches `install-agent.sh` from the same ref it installs.** Previously the updater always pulled the installer from `main`, even when the operator pinned a release with `--ref vX.Y.Z`. That allowed the installer logic from `main` to combine with the binary from a tagged release — the two could disagree on systemd unit shape, env file format, or platform detection between releases. The default URL now follows `--ref`: `main` only when `--ref=latest`, otherwise the exact tag. `NS_INSTALLER_URL` still wins for forks.
+- **`publish-server-image.sh` now provisions a dedicated `docker buildx` builder** (`netsentinel-release-builder`, `docker-container` driver) before invoking `buildx build`. The default `docker` driver does not support multi-platform builds, so a fresh maintainer machine would otherwise hit `ERROR: Multi-platform build is not supported for the docker driver` on the first publish. `BUILDER_NAME` is overridable for operators who already maintain a shared builder. The script also now accepts `-h` / `--help` before argument-count validation, so the help text is printed even with no positional args.
+
+### Upgrade notes
+
+1. No schema or wire-format changes from beta.2.
+2. **Hub upgrade:** `bash ~/netsentinel/scripts/update-hub.sh --version v0.4.3-beta.3`.
+3. **Agent upgrade:** `curl -fsSL .../scripts/update-agent.sh | sudo bash -s -- --ref v0.4.3-beta.3`. Operators who already updated to beta.2 should re-pull `update-agent.sh` itself before pinning to a tag, since the beta.2 copy still hard-codes the `main` installer URL.
+4. **Maintainers cutting this tag** should re-pull `scripts/publish-server-image.sh` before invoking it; first-time publishers no longer need to manually `docker buildx create` a multi-platform builder.
+
 ## [0.4.3-beta.2] — 2026-04-28 (pre-release)
 
 Iteration on top of beta.1 focused on lifecycle UX, repository layout, and release-pipeline split. No DB schema changes and no agent ↔ server wire-format changes; existing beta.1 installs upgrade with the same hub/agent commands as before.
