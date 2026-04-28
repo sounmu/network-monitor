@@ -125,6 +125,55 @@ Use `--bind "100.x.y.z"` to listen only on the agent's Tailscale interface, or c
 
 Full walkthrough with troubleshooting: [`docs/AFTER_INSTALL.md`](docs/AFTER_INSTALL.md).
 
+### Update
+
+Both installers are idempotent — re-running them is the supported update path. The `update-*.sh` helpers wrap that for you so you do not have to remember image tags or paste the JWT_SECRET again.
+
+**Hub** (run on the dashboard host):
+
+```bash
+# latest published image
+bash ~/netsentinel/scripts/update-hub.sh
+
+# pin to a specific release
+bash ~/netsentinel/scripts/update-hub.sh --version v0.5.1
+
+# only refresh the docker image, do not touch local repo (CI / cron)
+bash ~/netsentinel/scripts/update-hub.sh --skip-git-pull
+```
+
+It runs `git pull --ff-only`, `docker compose pull server`, recreates the container, and runs the smoke test. SQLite data, `.env`, and any `docker-compose.override.yml` are left alone (the `data/` directory is bind-mounted, so it survives container recreation).
+
+**Agent** (run on every monitored host):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sounmu/netsentinel/main/scripts/update-agent.sh \
+  | sudo bash                                  # → latest release
+
+curl -fsSL https://raw.githubusercontent.com/sounmu/netsentinel/main/scripts/update-agent.sh \
+  | sudo bash -s -- --ref v0.5.1               # → pinned tag
+```
+
+It reads `JWT_SECRET` / `AGENT_PORT` / `AGENT_BIND` back from `/etc/netsentinel/agent.env`, re-runs the installer with those values, swaps the binary in place, and restarts the systemd unit (Linux) or launchd daemon (macOS). Pass `--build-from-source --ref <branch>` to test an unreleased fix.
+
+### Remove
+
+**Hub** — default keeps the SQLite DB and `.env` so a re-install resumes seamlessly; pass `--purge` to wipe everything.
+
+```bash
+bash ~/netsentinel/scripts/remove-hub.sh                  # stop the stack only
+bash ~/netsentinel/scripts/remove-hub.sh --purge --remove-image -y   # full wipe
+```
+
+**Agent** — stops the service and removes the binary, config (`/etc/netsentinel/`), unit file, and log dir.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sounmu/netsentinel/main/scripts/remove-agent.sh \
+  | sudo bash
+```
+
+Equivalent to `sudo install-agent.sh --uninstall` — pick whichever is on hand.
+
 ### If something goes wrong
 
 ```bash

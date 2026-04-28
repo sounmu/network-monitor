@@ -142,6 +142,7 @@ if [[ $UNINSTALL -eq 1 ]]; then
   rm -f "${PREFIX}/bin/${WRAPPER_NAME}"
   rm -rf "${CONFIG_DIR}"
   rm -rf "/usr/local/etc/netsentinel"
+  rm -rf "${LOG_DIR}"
   echo "✅ Uninstalled."
   exit 0
 fi
