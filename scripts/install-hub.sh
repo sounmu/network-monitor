@@ -10,8 +10,8 @@
 #   1. Verify Docker + Compose v2 are available.
 #   2. Clone (or pull) the repo into $HOME/netsentinel.
 #   3. Run scripts/bootstrap.sh to generate .env with random secrets.
-#   4. `docker compose up -d --build` to build & start the single
-#      server+web container.
+#   4. `docker compose pull && docker compose up -d` to download and
+#      start the published server+web image.
 #   5. Run scripts/smoke-test.sh to verify the install.
 #   6. Print the JWT_SECRET (so the operator can paste it into the
 #      agent installers on every host they want to monitor) and the
@@ -61,9 +61,22 @@ else
   echo "ℹ️  .env already exists at ${INSTALL_DIR}/.env — keeping it."
 fi
 
-# ── build + start ──────────────────────────────────────────────────
-echo "▶ docker compose up -d --build (first run downloads images + compiles the Rust server — ~5 min)…"
-docker compose up -d --build
+image_ref="$(grep -E '^NETSENTINEL_VERSION=' .env 2>/dev/null | tail -n1 | cut -d= -f2- || true)"
+if [[ -z "$image_ref" && "$REF" == v* ]]; then
+  {
+    echo
+    echo "NETSENTINEL_VERSION=${REF}"
+  } >> .env
+  image_ref="$REF"
+  echo "✅ Pinned server image tag to ${REF} in .env"
+fi
+
+# ── pull + start ───────────────────────────────────────────────────
+echo "▶ docker compose pull server (downloads the published NetSentinel image)…"
+docker compose pull server
+
+echo "▶ docker compose up -d server…"
+docker compose up -d server
 
 # ── smoke test ─────────────────────────────────────────────────────
 echo "▶ Running smoke test…"
@@ -81,6 +94,10 @@ fi
 jwt="$(grep ^JWT_SECRET= .env | cut -d= -f2-)"
 port="$(grep ^SERVER_PORT= .env 2>/dev/null | cut -d= -f2- || true)"
 port="${port:-3000}"
+agent_ref_arg=""
+if [[ "$image_ref" == v* ]]; then
+  agent_ref_arg=" --ref \"${image_ref}\""
+fi
 lan_ip=""
 if command -v hostname >/dev/null 2>&1 && hostname -I >/dev/null 2>&1; then
   lan_ip="$(hostname -I | awk '{print $1}')"
@@ -99,7 +116,7 @@ cat <<EOM
        installer (replace the trailing secret with the value below):
 
        curl -fsSL https://raw.githubusercontent.com/sounmu/netsentinel/${REF}/scripts/install-agent.sh \\
-         | sudo bash -s -- --jwt-secret "${jwt}"
+         | sudo bash -s -- --jwt-secret "${jwt}"${agent_ref_arg}
 
        The agent will print the host_key to paste into the hub's
        Agents UI.

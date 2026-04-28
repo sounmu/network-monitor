@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: netsentinel-server
+        working-directory: server
 
     steps:
       - name: Checkout
@@ -27,7 +27,7 @@ jobs:
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: netsentinel-server
+          workspaces: server
 
       - name: Check formatting
         run: cargo fmt --check
@@ -46,7 +46,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: netsentinel-agent
+        working-directory: agent
 
     steps:
       - name: Checkout
@@ -60,7 +60,7 @@ jobs:
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: netsentinel-agent
+          workspaces: agent
 
       - name: Check formatting
         run: cargo fmt --check

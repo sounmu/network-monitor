@@ -85,7 +85,7 @@ if lsof -iTCP:3000 -sTCP:LISTEN -Pn 2>/dev/null | grep -q LISTEN; then
   fi
 else
   warn "port 3000 is free" \
-       "the stack is not running — try 'docker compose up -d --build'"
+       "the stack is not running — try 'docker compose pull server && docker compose up -d server'"
 fi
 
 echo
@@ -96,11 +96,11 @@ if ! docker compose ps >/dev/null 2>&1; then
       "run from the repo root and make sure the Docker daemon is up"
   echo
 else
-  for svc in db server; do
+  for svc in server; do
     state="$(docker compose ps --format '{{.Name}} {{.Status}}' 2>/dev/null | awk -v s="$svc" '$1 ~ s {print $0; exit}')"
     if [[ -z "$state" ]]; then
       warn "${svc} container not running" \
-           "run 'docker compose up -d --build' to start it"
+           "run 'docker compose pull server && docker compose up -d server' to start it"
     elif echo "$state" | grep -qi 'healthy\|Up'; then
       ok "${svc} is ${state#* }"
     else

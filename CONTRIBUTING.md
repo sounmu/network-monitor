@@ -38,9 +38,10 @@ cd netsentinel
 # 2. Generate .env with random secrets (JWT_SECRET)
 ./scripts/bootstrap.sh
 
-# 3. Start the full stack (single server container serves both API and
-#    the embedded web static bundle)
-docker compose up -d --build
+# 3. Start the published stack (single server container serves both API
+#    and the embedded web static bundle)
+docker compose pull server
+docker compose up -d server
 
 # 4. Verify the install
 ./scripts/smoke-test.sh
@@ -54,10 +55,10 @@ The dashboard **and** the API share **http://localhost:3000**. Open `/setup` for
 
 ```
 netsentinel/
-├── netsentinel-server/   # Rust/Axum backend — REST API, scraper, SSE
-├── netsentinel-agent/    # Rust daemon — collects host metrics
-├── netsentinel-web/      # Next.js dashboard
-├── docker-compose.yml        # Full stack orchestration
+├── server/   # Rust/Axum backend — REST API, scraper, SSE
+├── agent/    # Rust daemon — collects host metrics
+├── web/      # Next.js dashboard
+├── docker-compose.yml        # Pull-only homelab stack
 ├── .env.example              # Environment variable template
 └── .github/workflows/        # GitHub Actions CI
 ```
@@ -68,10 +69,28 @@ See [ARCHITECTURE.md](README.md#architecture) in the README for data flow detail
 
 ## Development Workflow
 
+The root `docker-compose.yml` is the homelab install path and pulls a published image. When you need Docker to build the current checkout instead, drop a `docker-compose.override.yml` next to it — `docker compose` automatically merges any file with that name on top of the base, so the override stays untracked (`.gitignore`d) and never leaks into the upstream:
+
+```yaml
+# docker-compose.override.yml — untracked, per-host
+services:
+  server:
+    image: netsentinel-server:dev
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+      args:
+        - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-}
+```
+
+```bash
+docker compose up -d --build server
+```
+
 ### Server (Rust/Axum)
 
 ```bash
-cd netsentinel-server
+cd server
 cp .env.example .env          # edit DATABASE_URL etc.
 cargo run                     # starts on 0.0.0.0:3000 by default
 ```
@@ -85,12 +104,12 @@ cargo fmt                     # auto-format
 cargo test                    # run unit tests
 ```
 
-When testing auth locally over plain HTTP, set `COOKIE_SECURE=false` in `netsentinel-server/.env`; production should keep the default secure cookie. Prometheus scraping is auth-required by default, so set `METRICS_TOKEN` (recommended) or explicitly opt in to anonymous scraping with `ALLOW_UNAUTHENTICATED_METRICS=true`.
+When testing auth locally over plain HTTP, set `COOKIE_SECURE=false` in `server/.env`; production should keep the default secure cookie. Prometheus scraping is auth-required by default, so set `METRICS_TOKEN` (recommended) or explicitly opt in to anonymous scraping with `ALLOW_UNAUTHENTICATED_METRICS=true`.
 
 ### Agent (Rust)
 
 ```bash
-cd netsentinel-agent
+cd agent
 cp .env.example .env          # edit JWT_SECRET, AGENT_PORT, AGENT_BIND
 cargo run
 ```
@@ -98,7 +117,7 @@ cargo run
 ### Web (Next.js)
 
 ```bash
-cd netsentinel-web
+cd web
 npm install
 cp .env.example .env.local    # set NEXT_PUBLIC_API_URL=http://localhost:3000
 npm run dev                   # starts on http://localhost:3001 with HMR
@@ -148,7 +167,7 @@ npm run build    # production static export → emits out/
 ### Server unit tests
 
 ```bash
-cd netsentinel-server
+cd server
 cargo test
 ```
 
@@ -161,18 +180,18 @@ Schema changes use [sqlx migrations](https://docs.rs/sqlx/latest/sqlx/macro.migr
 ```bash
 # To add a new migration:
 # 1. Create a new numbered SQL file:
-touch netsentinel-server/migrations/006_your_change.sql
+touch server/migrations/006_your_change.sql
 # 2. Write idempotent SQL (use IF NOT EXISTS, IF EXISTS, etc.)
 # 3. Never modify existing migration files — always create new ones
 # 4. Migrations are embedded at compile time via sqlx::migrate!()
 ```
 
-For new time-series metrics, keep raw and rollup storage in sync: add nullable raw columns for write-time scalar projections when they avoid repeated JSON parsing, update the batch insert path, update `metrics_5min` aggregation, and update every branch of `fetch_metrics_range`.
+For new time-series metrics, keep raw and rollup storage in sync: add nullable raw columns for write-time scalar projections when they avoid repeated JSON parsing, update the batch insert path, update `metrics_5min` aggregation, and update every branch of `fetch_metrics_range`. If the metric is rendered on `/host?key=`, also update the lightweight `/api/metrics/{host_key}/chart` projection (`fetch_chart_metrics_range`) so chart pages do not fall back to caching full snapshot rows.
 
 ### Web unit tests
 
 ```bash
-cd netsentinel-web
+cd web
 npm test
 ```
 
@@ -184,11 +203,11 @@ Tests use [Vitest](https://vitest.dev/). New tests go in `*.test.ts(x)` files co
 
 ### Image tagging
 
-From v0.3.6 there is **one** Docker image — `netsentinel-server` bakes the web static bundle into `/app/static`. The separate `netsentinel-web` image has been removed. Images are tagged with the git short SHA and `latest` on every successful deploy:
+From v0.4.2 there is **one** Docker image — `netsentinel-server` bakes the web static bundle into `/app/static`. The separate `netsentinel-web` image has been removed. Tagged releases publish both the release tag and `latest`:
 
 ```bash
 # CI builds and pushes:
-ghcr.io/sounmu/netsentinel-server:<short-sha>
+ghcr.io/sounmu/netsentinel-server:<release-tag>
 ghcr.io/sounmu/netsentinel-server:latest
 ```
 
@@ -197,15 +216,14 @@ ghcr.io/sounmu/netsentinel-server:latest
 If a deployment causes issues, roll back to a known-good image:
 
 ```bash
-# 1. Find the previous working image tag (git short SHA from the last good release)
-git log --oneline -5          # e.g. 6a0a9d1 is bad, 95afce6 was good
+# 1. Find the previous working release tag
+git tag --sort=-creatordate | head
 
-# 2. Pin docker-compose to the known-good image
-#    Edit docker-compose.yml (or use an override file):
-#      image: ghcr.io/sounmu/netsentinel-server:95afce6
+# 2. Pin docker-compose to the known-good image in .env:
+#      NETSENTINEL_VERSION=v0.4.2
 
 # 3. Redeploy
-docker compose pull && docker compose up -d
+docker compose pull server && docker compose up -d server
 
 # 4. Verify health
 curl -sf http://localhost:3000/api/health

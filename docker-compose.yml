@@ -1,37 +1,23 @@
 services:
-  # ─── Rust backend server + embedded web static bundle ────────────
-  # Single container serves both /api/* and the Next.js static export
-  # on port 3000. All persistent state lives in the `./data` bind
-  # mount as a single SQLite file (`netsentinel.db`), so operators can
-  # back up with `cp` and there is nothing else to keep in sync.
+  # NetSentinel hub: Rust API + embedded Next.js static dashboard.
+  # The default homelab path pulls a published image instead of building
+  # locally. To rebuild from a checkout (or pin to your own image, attach
+  # an external network, add a Cloudflare Tunnel sidecar, etc.) drop a
+  # `docker-compose.override.yml` next to this file — compose merges it
+  # automatically and the override stays out of git.
   server:
-    image: ghcr.io/sounmu/netsentinel-server:latest
-    build:
-      context: .
-      dockerfile: netsentinel-server/Dockerfile
-      args:
-        # NEXT_PUBLIC_API_URL is baked into the static bundle at build
-        # time. Empty = same-origin (default — fine for localhost and
-        # single-hostname reverse proxies). Override in .env when the
-        # API and dashboard live on different hostnames.
-        - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-}
+    image: ghcr.io/sounmu/netsentinel-server:${NETSENTINEL_VERSION:-latest}
     restart: unless-stopped
     networks:
-      - shared-network
+      - netsentinel
     logging:
       driver: json-file
       options:
         max-size: "10m"
         max-file: "3"
-    # Root `.env` is the single source of truth. Every value
-    # (JWT_SECRET, ALLOWED_ORIGINS, METRICS_TOKEN, …) is injected here.
-    # `netsentinel-server/.env` is reserved for local `cargo run`
-    # development only — it is NOT mounted or read by Docker Compose.
     env_file:
       - .env
     environment:
-      # Single embedded SQLite file under /app/data. WAL sidecar files
-      # (`.wal`, `.shm`) live next to it on the same volume.
       - DATABASE_URL=sqlite:///app/data/netsentinel.db
       - SERVER_HOST=0.0.0.0
       - SERVER_PORT=3000
@@ -54,5 +40,5 @@ services:
           memory: 1G
 
 networks:
-  shared-network:
-    external: true
+  netsentinel:
+    driver: bridge

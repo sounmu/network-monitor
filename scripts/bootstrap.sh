@@ -59,13 +59,7 @@ JWT_SECRET="$(openssl rand -hex 32)"
 # ── write .env from the example, substituting placeholders ──────────
 # (No DB password needed — NetSentinel stores everything in a single
 # embedded SQLite file at ./data/netsentinel.db.)
-python3 - "$EXAMPLE_PATH" "$ENV_PATH" "$JWT_SECRET" <<'PY'
-import sys, re
-src, dst, jwt = sys.argv[1:]
-content = open(src).read()
-content = re.sub(r'^JWT_SECRET=.*$', f'JWT_SECRET={jwt}', content, flags=re.M)
-open(dst, 'w').write(content)
-PY
+sed "s|^JWT_SECRET=.*$|JWT_SECRET=${JWT_SECRET}|" "$EXAMPLE_PATH" > "$ENV_PATH"
 
 chmod 600 "$ENV_PATH"
 
@@ -81,7 +75,7 @@ echo
 echo "        grep ^JWT_SECRET= ${ENV_PATH} | cut -d= -f2-"
 echo
 echo "👉 Next:"
-echo "    1. docker compose up -d --build"
+echo "    1. docker compose pull server && docker compose up -d server"
 echo "    2. ./scripts/smoke-test.sh"
 echo "    3. open http://localhost:3000/setup   # create the first admin"
 echo

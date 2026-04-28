@@ -78,11 +78,11 @@ The production hub is a **single container**: Axum serves both `/api/*` and the 
 
 ```
 netsentinel/
-├── netsentinel-server/   # Rust/Axum backend — metrics API, scraper, alerts,
-│                         # and (in prod) the embedded web static bundle
-├── netsentinel-web/      # Next.js dashboard — compiled to `output: 'export'`
-│                         # and baked into the server image at build time
-└── netsentinel-agent/    # Rust agent daemon
+├── server/   # Rust/Axum backend — metrics API, scraper, alerts,
+│             # and (in prod) the embedded web static bundle
+├── web/      # Next.js dashboard — compiled to `output: 'export'`
+│             # and baked into the server image at build time
+└── agent/    # Rust agent daemon
 ```
 
 ---
@@ -97,7 +97,7 @@ On the machine that will run the dashboard + API:
 curl -fsSL https://raw.githubusercontent.com/sounmu/netsentinel/main/scripts/install-hub.sh | bash
 ```
 
-It clones the repo into `~/netsentinel`, generates `.env` with random secrets, runs `docker compose up -d --build`, verifies the install with a 5-check smoke test, and prints the URL + the JWT_SECRET you'll need for the agent step below.
+It clones the repo into `~/netsentinel`, generates `.env` with random secrets, pulls the published `ghcr.io/sounmu/netsentinel-server` image, starts the hub, verifies the install with a 5-check smoke test, and prints the URL + the JWT_SECRET you'll need for the agent step below.
 
 Prerequisites: Docker + Compose v2, `git`, `curl`, `openssl`. Tested on Linux and macOS; Windows users should run this inside WSL2.
 
@@ -110,13 +110,12 @@ curl -fsSL https://raw.githubusercontent.com/sounmu/netsentinel/main/scripts/ins
   | sudo bash -s -- \
       --jwt-secret "PASTE_THE_HUB_SECRET_HERE" \
       --bind "0.0.0.0" \
-      --port 9101 \
-      --ref main
+      --port 9101
 ```
 
-Use `--bind "100.x.y.z"` to listen only on the agent's Tailscale interface, or change `--port` and register the matching `<agent-ip>:<port>` in the hub. The installer builds the agent binary, drops a systemd unit (Linux) or launchd daemon (macOS), starts the service, and prints the exact `host_key` you should paste into the hub's Agents page. Re-run the same command later with `--ref <tag-or-branch>` to update the native agent in place.
+Use `--bind "100.x.y.z"` to listen only on the agent's Tailscale interface, or change `--port` and register the matching `<agent-ip>:<port>` in the hub. The installer downloads the matching prebuilt agent from GitHub Releases, verifies `SHA256SUMS`, drops a systemd unit (Linux) or launchd daemon (macOS), starts the service, and prints the exact `host_key` you should paste into the hub's Agents page. Re-run the same command later with `--ref <release-tag>` to pin or update the native agent in place.
 
-> The agent currently builds from source via `cargo install` — if the target machine does not have Rust, the installer prints the one-line rustup command to run first. Phase B will publish prebuilt binaries via GitHub Releases so this step becomes a pure download.
+> Need an unreleased branch or local fork? Add `--build-from-source --ref <branch-or-tag>`; that path requires `git` and the Rust toolchain.
 
 ### Register the host in the UI
 
@@ -126,6 +125,55 @@ Use `--bind "100.x.y.z"` to listen only on the agent's Tailscale interface, or c
 
 Full walkthrough with troubleshooting: [`docs/AFTER_INSTALL.md`](docs/AFTER_INSTALL.md).
 
+### Update
+
+Both installers are idempotent — re-running them is the supported update path. The `update-*.sh` helpers wrap that for you so you do not have to remember image tags or paste the JWT_SECRET again.
+
+**Hub** (run on the dashboard host):
+
+```bash
+# latest published image
+bash ~/netsentinel/scripts/update-hub.sh
+
+# pin to a specific release
+bash ~/netsentinel/scripts/update-hub.sh --version v0.5.1
+
+# only refresh the docker image, do not touch local repo (CI / cron)
+bash ~/netsentinel/scripts/update-hub.sh --skip-git-pull
+```
+
+It runs `git pull --ff-only`, `docker compose pull server`, recreates the container, and runs the smoke test. SQLite data, `.env`, and any `docker-compose.override.yml` are left alone (the `data/` directory is bind-mounted, so it survives container recreation).
+
+**Agent** (run on every monitored host):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sounmu/netsentinel/main/scripts/update-agent.sh \
+  | sudo bash                                  # → latest release
+
+curl -fsSL https://raw.githubusercontent.com/sounmu/netsentinel/main/scripts/update-agent.sh \
+  | sudo bash -s -- --ref v0.5.1               # → pinned tag
+```
+
+It reads `JWT_SECRET` / `AGENT_PORT` / `AGENT_BIND` back from `/etc/netsentinel/agent.env`, re-runs the installer with those values, swaps the binary in place, and restarts the systemd unit (Linux) or launchd daemon (macOS). Pass `--build-from-source --ref <branch>` to test an unreleased fix.
+
+### Remove
+
+**Hub** — default keeps the SQLite DB and `.env` so a re-install resumes seamlessly; pass `--purge` to wipe everything.
+
+```bash
+bash ~/netsentinel/scripts/remove-hub.sh                  # stop the stack only
+bash ~/netsentinel/scripts/remove-hub.sh --purge --remove-image -y   # full wipe
+```
+
+**Agent** — stops the service and removes the binary, config (`/etc/netsentinel/`), unit file, and log dir.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sounmu/netsentinel/main/scripts/remove-agent.sh \
+  | sudo bash
+```
+
+Equivalent to `sudo install-agent.sh --uninstall` — pick whichever is on hand.
+
 ### If something goes wrong
 
 ```bash
@@ -133,15 +181,16 @@ cd ~/netsentinel
 ./scripts/doctor.sh        # laddered diagnosis, tells you the exact recovery command
 ```
 
-### Offline / air-gapped install
+### Manual install
 
-When the one-liner can't reach GitHub (corporate proxy, offline lab, etc.), run the same three steps by hand:
+When you do not want to pipe the installer into a shell, run the same steps by hand:
 
 ```bash
 git clone https://github.com/sounmu/netsentinel.git
 cd netsentinel
 ./scripts/bootstrap.sh            # generates .env
-docker compose up -d --build
+docker compose pull server
+docker compose up -d server
 ./scripts/smoke-test.sh
 ```
 
@@ -154,7 +203,7 @@ Use this path when you are actively changing code. For production homelab instal
 ### Server (port 3000)
 
 ```bash
-cd netsentinel-server
+cd server
 cp .env.example .env   # set JWT_SECRET; DATABASE_URL defaults to sqlite://./data/netsentinel.db
 mkdir -p data          # SQLite needs the parent directory to exist
 cargo run
@@ -163,7 +212,7 @@ cargo run
 ### Web dashboard (port 3001, HMR)
 
 ```bash
-cd netsentinel-web
+cd web
 cp .env.example .env.local   # NEXT_PUBLIC_API_URL=http://localhost:3000
 npm install
 npm run dev
@@ -174,7 +223,7 @@ npm run dev
 ### Agent (port 9101)
 
 ```bash
-cd netsentinel-agent
+cd agent
 cp .env.example .env   # JWT_SECRET must match the server
 cargo run
 ```
@@ -188,14 +237,15 @@ cargo run
 | Variable | Required | Default | Description |
 |---|---|---|---|
 | `JWT_SECRET` | **Yes** | — | HS256 secret (≥ 32 chars). Every agent needs the same value. `bootstrap.sh` generates it via `openssl rand -hex 32`. |
+| `NETSENTINEL_VERSION` | No | `latest` | Docker image tag for `ghcr.io/sounmu/netsentinel-server`. Pin a release tag such as `v0.4.2` for reproducible installs. |
 | `CLOUDFLARE_TUNNEL_TOKEN` | No | — | Cloudflare Tunnel token. Only read when you activate the `tunnel` service via a compose override — see [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md). |
-| `NEXT_PUBLIC_API_URL` | No | empty (same-origin) | Backend URL the **browser** fetches from. Empty = same-origin, correct for localhost and single-hostname reverse proxies. Override only when the dashboard and API live on different hostnames — see [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md). Baked into the web bundle at build time; changing this value requires `docker compose up -d --build server`. |
+| `NEXT_PUBLIC_API_URL` | No | empty (same-origin) | Build-time web setting for custom local images. The published image is built for same-origin deployments, which is the recommended homelab path. Split-origin deployments should either build a custom image via a `docker-compose.override.yml` (see [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)) or put dashboard/API behind one reverse-proxy hostname. |
 
 > Upgrading from v0.3.x? The old `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` variables are no longer read — remove them from `.env`. There is nothing to migrate if this is a greenfield install. See the v0.4.0 section of [`CHANGELOG.md`](./CHANGELOG.md) for how to move data from an existing Postgres deployment.
 
 ### Server — all keys below
 
-Under Docker Compose the server reads **root `.env`** (via `env_file: .env` in `docker-compose.yml`). `netsentinel-server/.env` is only consulted by a local `cargo run`. So add these keys to `./env` for a Docker install, or to `netsentinel-server/.env` for a local dev install — never both.
+Under Docker Compose the server reads **root `.env`** (via `env_file: .env` in `docker-compose.yml`). `server/.env` is only consulted by a local `cargo run`. So add these keys to `./env` for a Docker install, or to `server/.env` for a local dev install — never both.
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
@@ -207,7 +257,8 @@ Under Docker Compose the server reads **root `.env`** (via `env_file: .env` in `
 | `MAX_DB_CONNECTIONS` | No | `10` | sqlx connection pool size. SQLite serialises writes via a single writer lock, so values beyond ~10 provide no throughput gain and only grow idle pool memory. |
 | `SSE_BUFFER_SIZE` | No | `128` | SSE broadcast channel buffer; floor is 128, so env can raise but not lower it |
 | `TRUSTED_PROXY_COUNT` | No | `0` | Reverse proxy count for X-Forwarded-For (0 = use peer IP directly) |
-| `METRICS_CACHE_MAX_ENTRIES` | No | `20` | Max in-memory query-cache entries (oldest-inserted evicted when full; TTL 120 s) |
+| `METRICS_CACHE_MAX_ENTRIES` | No | `20` | Max in-memory query-cache entries per cache (raw ≤6h ranges are not server-cached; TTL 120 s) |
+| `METRICS_CACHE_MAX_BYTES` | No | `33554432` | Estimated byte budget per metrics query cache (default 32 MiB). Oldest entries are evicted when either the entry cap or byte cap is exceeded |
 | `SQLITE_MMAP_SIZE` | No | `67108864` | SQLite mmap size in bytes (default 64 MiB) |
 | `SQLITE_CACHE_SIZE_KB` | No | `8192` | SQLite page cache size in KiB (default 8 MiB; applied as negative `cache_size`) |
 | `SQLITE_TEMP_STORE` | No | `MEMORY` | SQLite temp storage mode: `DEFAULT`, `FILE`, or `MEMORY` |
@@ -215,7 +266,7 @@ Under Docker Compose the server reads **root `.env`** (via `env_file: .env` in `
 | `METRICS_TOKEN` | No | — | Bearer token for `/metrics` (Prometheus). When set, every scrape must send `Authorization: Bearer <token>`. |
 | `ALLOW_UNAUTHENTICATED_METRICS` | No | `false` | Explicit opt-in to leave `/metrics` open when `METRICS_TOKEN` is unset. |
 
-### Agent `netsentinel-agent/.env`
+### Agent `agent/.env`
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
@@ -246,6 +297,7 @@ All endpoints require `Authorization: Bearer <JWT>` unless noted. Read endpoints
 | `DELETE` | `/api/hosts/{host_key}` | Delete a host |
 | `GET` | `/api/metrics/{host_key}` | Recent 50 metric rows |
 | `GET` | `/api/metrics/{host_key}?start=&end=` | Metrics in a time range (ISO 8601) |
+| `GET` | `/api/metrics/{host_key}/chart?start=&end=` | Lightweight chart rows for host detail graphs (≤1h raw, >1h 5-min rollup, >14d 15-min re-aggregation) |
 | `POST` | `/api/metrics/batch` | Batch metrics for multiple hosts (max 50) |
 | `GET` | `/api/uptime/{host_key}?days=` | Daily uptime breakdown |
 | `GET` | `/api/alert-configs` | Global alert defaults |
